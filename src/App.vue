@@ -1,11 +1,21 @@
-<script setup lang="ts"></script>
-
+<script setup lang="ts">
+import AppMenu from './components/AppMenu.vue'
+</script>
 <template>
-  <h1>You did it!</h1>
-  <p>
-    Visit <a href="https://vuejs.org/" target="_blank" rel="noopener">vuejs.org</a> to read the
-    documentation
-  </p>
-</template>
+    <div class="common-layout">
+        <el-container>
+            <el-header>
+                <AppMenu />
+            </el-header>
+            <el-container>
+                <el-aside width="200px"></el-aside>
+                <el-main>
+                    <RouterView />
+                </el-main>
+                <el-footer></el-footer>
+            </el-container>
+        </el-container>
+    </div>
 
-<style scoped></style>
+
+</template>

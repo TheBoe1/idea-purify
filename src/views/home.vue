@@ -1,0 +1,129 @@
+<script lang="ts" setup>
+import { nextTick, onMounted, ref } from 'vue'
+import { ElNotification } from 'element-plus'
+interface RestaurantItem {
+    value: string
+}
+const state2 = ref('')
+const loading1 = ref(false)
+const restaurants = ref<RestaurantItem[]>([])
+const querySearch = (queryString: string, cb: any) => {
+    const results = queryString
+        ? restaurants.value.filter(createFilter(queryString))
+        : console.log('no queryString')
+    // call callback function to return suggestions
+    console.log('results', results)
+    cb(results)
+}
+const createFilter = (queryString: string) => {
+    return (item: RestaurantItem) => {
+        return (
+            queryString.length >= 2 &&
+            item.value.toLowerCase().indexOf(queryString.toLowerCase()) != -1
+
+        )
+    }
+}
+const loadAll = () => {
+    return [
+        { value: '我今天吃了什么' },
+    ]
+}
+
+const handleSelect = (item: Record<string, any>) => {
+    console.log(item)
+}
+const handleSubmit = () => {
+
+
+    if (state2.value) {
+        loading1.value = true
+        restaurants.value.push(
+            {
+                value: state2.value,
+            }
+        )
+        state2.value = ''
+        loading1.value = false
+    } else {
+        ElNotification({
+            title: '告警',
+            message: '请输入内容',
+            type: 'warning',
+        })
+
+    }
+
+
+}
+onMounted(() => {
+    restaurants.value = loadAll()
+})
+</script>
+
+
+<template>
+    <div class="idea-area">
+        <div class="idea-input">
+            <div class="idea-title">请输入一个想法</div>
+            <div v-loading="loading1" class="loading">
+                <el-autocomplete v-model="state2" :fetch-suggestions="querySearch" :trigger-on-focus="false" clearable
+                    class="w-50" placeholder="Please Input" @select="handleSelect" />
+                <div class="idea-commit">
+                    <el-button type="primary" @click="handleSubmit">提交</el-button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</template>
+
+
+
+
+
+
+
+
+<style scoped>
+.loading {
+    width: 200px;
+    height: 200px;
+}
+
+.idea-area {
+
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 2rem;
+}
+
+.idea-title {
+    font-size: 1.825rem;
+    min-height: 2.5em;
+    justify-content: center;
+    display: flex;
+    align-items: center;
+}
+
+.idea-input {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.idea-commit {
+    transform: translateY(20px);
+}
+
+@media screen and (max-width: 768px) {
+    .demo-autocomplete {
+        gap: 1rem;
+    }
+
+    .demo-block {
+        width: 100%;
+    }
+}
+</style>
