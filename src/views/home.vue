@@ -1,10 +1,10 @@
 <script lang="ts" setup>
-import { nextTick, onMounted, ref } from 'vue'
+import {  onMounted, ref } from 'vue'
 import { ElNotification } from 'element-plus'
 interface RestaurantItem {
     value: string
 }
-const state2 = ref('')
+const ideaText = ref('')
 const loading1 = ref(false)
 const restaurants = ref<RestaurantItem[]>([])
 const querySearch = (queryString: string, cb: any) => {
@@ -33,24 +33,63 @@ const loadAll = () => {
 const handleSelect = (item: Record<string, any>) => {
     console.log(item)
 }
-const handleSubmit = () => {
+const handleSubmit = async () => {
 
-
-    if (state2.value) {
+    if (!ideaText.value.trim().length) {
+        ElNotification({
+            title: '告警',
+            message: '请勿输入空格',
+            type: 'error',
+        })
+        return
+    }
+    if (ideaText.value.trim().length < 2) {
+        ElNotification({
+            title: '告警',
+            message: '请输入至少两个字符',
+            type: 'warning',
+        })
+        return
+    }
+    if (ideaText.value) {
         loading1.value = true
-        restaurants.value.push(
-            {
-                value: state2.value,
-            }
-        )
-        state2.value = ''
-        loading1.value = false
+        try {
+            const responseidea = await fetch('/api/idea', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ idea: ideaText.value }),
+
+            })
+            const result = await responseidea.json()
+
+            console.log('Node 返回：', result)
+            ElNotification({
+                title: 'Success',
+                message: '成功提交想法',
+                type: 'success',
+            })
+            ideaText.value = ''
+            loading1.value = false
+
+        } catch (error) {
+            console.error('Error submitting idea:', error)
+            ElNotification({
+                title: 'Error',
+                message: '提交想法时出错',
+                type: 'error',
+            })
+            loading1.value = false
+        }
+
     } else {
         ElNotification({
             title: '告警',
             message: '请输入内容',
             type: 'warning',
         })
+        return
 
     }
 
@@ -67,7 +106,7 @@ onMounted(() => {
         <div class="idea-input">
             <div class="idea-title">请输入一个想法</div>
             <div v-loading="loading1" class="loading">
-                <el-autocomplete v-model="state2" :fetch-suggestions="querySearch" :trigger-on-focus="false" clearable
+                <el-autocomplete v-model="ideaText" :fetch-suggestions="querySearch" :trigger-on-focus="false" clearable
                     class="w-50" placeholder="Please Input" @select="handleSelect" />
                 <div class="idea-commit">
                     <el-button type="primary" @click="handleSubmit">提交</el-button>
@@ -77,13 +116,6 @@ onMounted(() => {
 
     </div>
 </template>
-
-
-
-
-
-
-
 
 <style scoped>
 .loading {
