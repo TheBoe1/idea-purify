@@ -24,6 +24,14 @@ const createFilter = (queryString: string) => {
         )
     }
 }
+const loadIdeas = async () => {
+    const response = await fetch('/api/ideas')
+
+    const data = await response.json()
+return data.map((item: { idea: string }) => ({
+        value: item.idea
+    }))
+}
 const loadAll = () => {
     return [
         { value: '我今天吃了什么' },
@@ -95,8 +103,14 @@ const handleSubmit = async () => {
 
 
 }
-onMounted(() => {
-    restaurants.value = loadAll()
+onMounted(async () => {
+    const ideas = await loadIdeas()
+    const defaultIdeas = loadAll()
+
+    restaurants.value = [
+        ...defaultIdeas,
+        ...ideas
+    ]
 })
 </script>
 
