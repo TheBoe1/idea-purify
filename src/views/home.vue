@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import {  onMounted, ref } from 'vue'
 import { ElNotification } from 'element-plus'
+import { loadAll } from '@/api/ideas'
 interface RestaurantItem {
-    value: string
+    ideaContent: string,
+    creatTime: Date,
 }
 const ideaText = ref('')
 const loading1 = ref(false)
@@ -19,24 +21,12 @@ const createFilter = (queryString: string) => {
     return (item: RestaurantItem) => {
         return (
             queryString.length >= 2 &&
-            item.value.toLowerCase().indexOf(queryString.toLowerCase()) != -1
+            item.ideaContent.toLowerCase().indexOf(queryString.toLowerCase()) != -1
 
         )
     }
 }
-const loadIdeas = async () => {
-    const response = await fetch('/api/ideas')
 
-    const data = await response.json()
-return data.map((item: { idea: string }) => ({
-        value: item.idea
-    }))
-}
-const loadAll = () => {
-    return [
-        { value: '我今天吃了什么' },
-    ]
-}
 
 const handleSelect = (item: Record<string, any>) => {
     console.log(item)
@@ -104,13 +94,13 @@ const handleSubmit = async () => {
 
 }
 onMounted(async () => {
-    const ideas = await loadIdeas()
     const defaultIdeas = loadAll()
 
-    restaurants.value = [
-        ...defaultIdeas,
-        ...ideas
-    ]
+    // restaurants.value = [
+    //     ...defaultIdeas,
+    //     ...ideas
+    // ]
+    restaurants.value= defaultIdeas
 })
 </script>
 

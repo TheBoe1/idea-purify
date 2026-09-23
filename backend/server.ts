@@ -1,5 +1,12 @@
 import http from "http";
 import fs from "fs";
+import { db } from './db'
+async function testDatabase() {
+    const [rows] = await db.query('SELECT 1')
+    console.log('MySQL连接成功：', rows)
+}
+
+testDatabase()
 const server = http.createServer((req, res) => {
 
     if (req.method === "POST" && req.url === "/idea") {
@@ -18,9 +25,9 @@ const server = http.createServer((req, res) => {
             console.log("ideas",ideas);
             ideas.push(newIdea);
             fs.writeFileSync(
-    "./backend/data/ideas.json",
-    JSON.stringify(ideas, null, 2),
-    "utf-8")
+                "./backend/data/ideas.json",
+                JSON.stringify(ideas, null, 2),
+                "utf-8")
             res.end(JSON.stringify({ 
                 message: "Idea received successfully!" ,
                 data:body
