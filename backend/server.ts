@@ -10,26 +10,21 @@ testDatabase()
 const server = http.createServer((req, res) => {
 
     if (req.method === "POST" && req.url === "/idea") {
-        const data = fs.readFileSync("./backend/data/ideas.json", "utf-8");
+        
         // Handle POST request to /idea
         let body = '';
         req.on('data', chunk => {
             body += chunk.toString();
         });
-        req.on('end', () => {
+        req.on('end', async () => {
             console.log('Received idea:', body);
+            const CreateIdeaRequest = JSON.parse(body)
+            console.log("CreateIdeaRequest",CreateIdeaRequest)
+            const RequestIdeaContent =  CreateIdeaRequest.ideaContent
+            console.log("RequestIdeaContent",RequestIdeaContent)
             res.writeHead(200, { "Content-Type": "application/json" });
-            const newIdea = JSON.parse(body);
-            console.log("newIdea",newIdea);
-            const ideas = JSON.parse(data);
-            console.log("ideas",ideas);
-            ideas.push(newIdea);
-            fs.writeFileSync(
-                "./backend/data/ideas.json",
-                JSON.stringify(ideas, null, 2),
-                "utf-8")
+            
             res.end(JSON.stringify({ 
-                message: "Idea received successfully!" ,
                 data:body
             }));
         });
@@ -49,7 +44,7 @@ const server = http.createServer((req, res) => {
     res.end(data);
 
     return;
-}
+    }
 
 
     if (req.url === "/") {

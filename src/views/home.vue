@@ -2,34 +2,32 @@
 import {  onMounted, ref } from 'vue'
 import { ElNotification } from 'element-plus'
 import { loadAll } from '@/api/ideas'
-interface RestaurantItem {
-    ideaContent: string,
-    creatTime: Date,
-}
+import type { IdeaSuggestion, Idea } from '@/types/idea'
+
+const suggestions = ref<IdeaSuggestion[]>([])
 const ideaText = ref('')
 const loading1 = ref(false)
-const restaurants = ref<RestaurantItem[]>([])
+
 const querySearch = (queryString: string, cb: any) => {
     const results = queryString
-        ? restaurants.value.filter(createFilter(queryString))
-        : console.log('no queryString')
-    // call callback function to return suggestions
-    console.log('results', results)
+    ? suggestions.value.filter(createFilter(queryString))
+    : suggestions.value
+
     cb(results)
 }
 const createFilter = (queryString: string) => {
-    return (item: RestaurantItem) => {
+    return (ideaSuggestion: IdeaSuggestion) => {
         return (
             queryString.length >= 2 &&
-            item.ideaContent.toLowerCase().indexOf(queryString.toLowerCase()) != -1
+            ideaSuggestion.ideaContent.toLowerCase().indexOf(queryString.toLowerCase()) != -1
 
         )
     }
 }
 
 
-const handleSelect = (item: Record<string, any>) => {
-    console.log(item)
+const handleSelect = (idea: Idea) => {
+    console.log('Selected:', idea)
 }
 const handleSubmit = async () => {
 
@@ -52,17 +50,20 @@ const handleSubmit = async () => {
     if (ideaText.value) {
         loading1.value = true
         try {
+            const createIdeaRequest: IdeaSuggestion = {
+                ideaContent: ideaText.value,
+            }
             const responseidea = await fetch('/api/idea', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ idea: ideaText.value }),
-
+                body: JSON.stringify(createIdeaRequest),
             })
+            console.log('Node 返回：responseidea', responseidea)
             const result = await responseidea.json()
 
-            console.log('Node 返回：', result)
+            console.log('Node 返回：result', result)
             ElNotification({
                 title: 'Success',
                 message: '成功提交想法',
@@ -100,7 +101,8 @@ onMounted(async () => {
     //     ...defaultIdeas,
     //     ...ideas
     // ]
-    restaurants.value= defaultIdeas
+    suggestions.value = defaultIdeas
+    console.log('suggestions', suggestions.value)
 })
 </script>
 
@@ -110,7 +112,7 @@ onMounted(async () => {
         <div class="idea-input">
             <div class="idea-title">请输入一个想法</div>
             <div v-loading="loading1" class="loading">
-                <el-autocomplete v-model="ideaText" :fetch-suggestions="querySearch" :trigger-on-focus="false" clearable
+                <el-autocomplete v-model="ideaText" :fetch-suggestions="querySearch" value-key="ideaContent" :trigger-on-focus="false" clearable
                     class="w-50" placeholder="Please Input" @select="handleSelect" />
                 <div class="idea-commit">
                     <el-button type="primary" @click="handleSubmit">提交</el-button>

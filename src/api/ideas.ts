@@ -10,8 +10,8 @@ export const loadIdeas = async () => {
 }
 export const loadAll = () => {
     return [
-        { ideaContent: '我今天吃了', creatTime: new Date() },
-        { ideaContent: '我今天想要做', creatTime: new Date() },
-        { ideaContent: '我今天看到了什么', creatTime: new Date() },
+        { ideaContent: '我今天吃了'},
+        { ideaContent: '我今天想要做' },
+        { ideaContent: '我今天看到了什么' },
     ]
 }

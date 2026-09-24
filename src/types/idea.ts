@@ -1,5 +1,8 @@
 export interface Idea {
     id: string
-    content: string
+    ideacontent: string
     createdTime: string
+}
+export interface IdeaSuggestion {
+    ideaContent: string
 }
