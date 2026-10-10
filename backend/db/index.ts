@@ -1,9 +1,13 @@
 import mysql from 'mysql2/promise'
+import { databaseConfig } from '../config.ts'
 
 export const db = mysql.createPool({
-    host: 'localhost',
-    port: 3306,
-    user: 'root',
-    password: 'root123456',
-    database: 'Ideasource',
+    ...databaseConfig,
+    charset: 'utf8mb4',
+    timezone: 'Z',
+    supportBigNumbers: true,
+    bigNumberStrings: true,
+    waitForConnections: true,
+    connectionLimit: 10,
+    connectTimeout: 3000,
 })
