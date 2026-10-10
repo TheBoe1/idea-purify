@@ -2,6 +2,8 @@
 {
   "extends": "@tsconfig/node24/tsconfig.json",
   "include": [
+    "backend/**/*.ts",
+    "shared/**/*.ts",
     "vite.config.*",
     "vitest.config.*",
     "cypress.config.*",
@@ -13,6 +15,7 @@
     // Bundler mode provides a smoother developer experience.
     "module": "preserve",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
 
     // Include Node.js types and avoid accidentally including other `@types/*` packages.
     "types": ["node"],

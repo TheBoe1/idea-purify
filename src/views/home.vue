@@ -2,13 +2,13 @@
 import {  onMounted, ref } from 'vue'
 import { ElNotification } from 'element-plus'
 import { loadAll } from '@/api/ideas'
-import type { IdeaSuggestion, Idea } from '@/types/idea'
+import type { CreateIdeaRequest, IdeaSuggestion } from '@/types/idea'
 
 const suggestions = ref<IdeaSuggestion[]>([])
 const ideaText = ref('')
 const loading1 = ref(false)
 
-const querySearch = (queryString: string, cb: any) => {
+const querySearch = (queryString: string, cb: (results: IdeaSuggestion[]) => void) => {
     const results = queryString
     ? suggestions.value.filter(createFilter(queryString))
     : suggestions.value
@@ -16,17 +16,17 @@ const querySearch = (queryString: string, cb: any) => {
     cb(results)
 }
 const createFilter = (queryString: string) => {
-    return (ideaSuggestion: IdeaSuggestion) => {
+    return (suggestion: IdeaSuggestion) => {
         return (
             queryString.length >= 2 &&
-            ideaSuggestion.ideaContent.toLowerCase().indexOf(queryString.toLowerCase()) != -1
+            suggestion.ideaContent.toLowerCase().includes(queryString.toLowerCase())
 
         )
     }
 }
 
 
-const handleSelect = (idea: Idea) => {
+const handleSelect = (idea: IdeaSuggestion) => {
     console.log('Selected:', idea)
 }
 const handleSubmit = async () => {
@@ -50,8 +50,8 @@ const handleSubmit = async () => {
     if (ideaText.value) {
         loading1.value = true
         try {
-            const createIdeaRequest: IdeaSuggestion = {
-                ideaContent: ideaText.value,
+            const createIdeaRequest: CreateIdeaRequest = {
+                ideaContent: ideaText.value.trim(),
             }
             const responseidea = await fetch('/api/idea', {
                 method: 'POST',
@@ -60,6 +60,9 @@ const handleSubmit = async () => {
                 },
                 body: JSON.stringify(createIdeaRequest),
             })
+            if (!responseidea.ok) {
+                throw new Error(`提交想法失败：${responseidea.status}`)
+            }
             console.log('Node 返回：responseidea', responseidea)
             const result = await responseidea.json()
 
