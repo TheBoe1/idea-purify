@@ -2,11 +2,15 @@
 import { ref } from 'vue'
 import { ElNotification } from 'element-plus'
 import { createIdea, loadAll } from '@/api/ideas'
-import type { IdeaDraft, IdeaSuggestion } from '@/types/idea'
+import type { IdeaSuggestion } from '@/types/idea'
+import { authState } from '@/stores/auth'
+import { ideaDraft, clearIdeaDraft } from '@/stores/ideaDraft'
 import { getIdeaContentError, IDEA_CONTENT_MAX_LENGTH } from '../../shared/contracts/idea.ts'
 
 const suggestions = loadAll()
-const draft = ref<IdeaDraft>({ ideaContent: '' })
+if (ideaDraft.ownerId && ideaDraft.ownerId !== authState.user?.userId) clearIdeaDraft()
+ideaDraft.ownerId = authState.user?.userId ?? ''
+const draft = ideaDraft
 const submitting = ref(false)
 const saved = ref(false)
 
@@ -17,7 +21,7 @@ const querySearch = (queryString: string, callback: (results: IdeaSuggestion[]) 
 
 const handleSubmit = async () => {
     if (submitting.value) return
-    const ideaContent = draft.value.ideaContent.trim()
+    const ideaContent = draft.ideaContent.trim()
     const message = getIdeaContentError(ideaContent)
     if (message) {
         ElNotification({ title: '请检查输入', message, type: 'warning' })
@@ -28,7 +32,7 @@ const handleSubmit = async () => {
     saved.value = false
     try {
         await createIdea({ ideaContent })
-        draft.value = { ideaContent: '' }
+        draft.ideaContent = ''
         saved.value = true
         ElNotification({ title: '保存成功', message: '可以在归档中查看这条想法', type: 'success' })
     } catch (error) {

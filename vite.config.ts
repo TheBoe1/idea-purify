@@ -8,6 +8,8 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
+  // 当前原生压缩器会在本机 SIGBUS；Terser 保持生产压缩并避免原生崩溃。
+  build: { minify: 'terser', cssMinify: 'esbuild' },
   plugins: [
     vue(),
     vueDevTools(),

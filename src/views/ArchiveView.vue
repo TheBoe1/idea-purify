@@ -43,7 +43,7 @@ onMounted(refresh)
                     :timestamp="formatTime(idea.createdTime)"
                     placement="top"
                 >
-                    <p class="idea-content">{{ idea.ideaContent }}</p>
+                    <RouterLink :to="{ name: 'idea-detail', params: { ideaId: idea.ideaId } }" class="idea-content">{{ idea.ideaContent }}</RouterLink>
                 </el-timeline-item>
             </el-timeline>
         </div>
@@ -55,5 +55,5 @@ onMounted(refresh)
 .archive-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .archive-header h1 { margin: 0; }
 .archive-list { min-height: 160px; margin-top: 24px; }
-.idea-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.idea-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; color: #409eff; }
 </style>
