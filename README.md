@@ -2,6 +2,27 @@
 
 Vue + Element Plus + Node.js + MySQL 的想法记录应用。支持用户注册、登录、管理员禁用账号，以及每个用户自己的想法时间线、卡片和详情。
 
+## 组件配置（Phase A）
+
+首页的 `IdeaEntryForm` 负责输入、提示词和表单交互，页面继续负责草稿、创建请求和结果反馈。管理员可在「组件配置」创建、校验、预览并保存 Element Plus 的输入框、多行输入框和按钮；登录用户在「组件展示」读取并复用保存的配置。预览输入只保留在当前页面，不保存到数据库，也不提交为 Idea。
+
+运行 `npm run db:init` 通过增量 SQL 安装 `component_definition`（代码安装的能力元数据）和 `component_config`（组件实例配置）。同一组件定义可保存多个实例。现有 Idea 数据不会清空或重新分配。
+
+共享 Schema 位于 `shared/contracts/component-config.ts`，包含版本、注册标识、名称、允许属性、字段、校验、叶子 children 和固定动作。配置仅能选择已注册能力；按钮最多绑定一条 `click / show-message` 文本提示，不支持数据库脚本、动态导入和任意属性透传。
+
+- 登录读取：`GET /component-definitions`、`GET /component-configs`、`GET /component-configs/:configId`。
+- 管理员写入：`POST /admin/component-configs`、`PUT /admin/component-configs/:configId`，JSON 请求为 `{ "schema": ... }`；没有删除接口。
+- 创建返回 201，更新返回 200；匿名返回 401，普通用户写入返回 403，非法配置返回 400，不存在的 ID 返回 404，数据库故障或损坏存储返回安全 503。
+- 菜单来自静态路由元数据；后端会话与角色仍是写入权限的最终边界。
+
+设计及边界见 `docs/component-config-phase-a.md`，验证方法见 `docs/testing-component-config.md`。真实 MySQL 配置验收单独执行：
+
+```sh
+node --env-file-if-exists=.env.local tests/mysql-component-config-smoke.ts
+```
+
+测试只创建随机临时用户和配置，并按精确 ID 清理；不发送外部邮件。拖拽、完整动态菜单和工作流留待后续阶段。
+
 ## 本地启动
 
 需要 Node.js 22.18+（或 24.12+）和 MySQL 8。
