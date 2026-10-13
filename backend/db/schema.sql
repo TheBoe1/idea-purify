@@ -33,3 +33,23 @@ CREATE TABLE IF NOT EXISTS auth_email_token (
     used_time DATETIME NULL,
     INDEX email_token_owner (user_id, purpose)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS component_definition (
+    component_key VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+    library_key VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    schema_version SMALLINT UNSIGNED NOT NULL,
+    metadata_json JSON NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS component_config (
+    id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+    component_key VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    schema_version SMALLINT UNSIGNED NOT NULL,
+    schema_json JSON NOT NULL,
+    created_by CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    updated_by CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    created_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    INDEX component_config_updated (updated_time),
+    INDEX component_config_definition (component_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

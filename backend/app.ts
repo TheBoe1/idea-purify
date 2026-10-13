@@ -14,6 +14,8 @@ import type { AuthRepository, UserRecord, EmailTokenPurpose } from './db/auth.ts
 import { publicUser } from './auth/user.ts'
 import { hashPassword, verifyPassword } from './auth/password.ts'
 import type { Mailer } from './auth/mail.ts'
+import type { ComponentConfigRepository } from './db/component-configs.ts'
+import { createComponentConfigRouter } from './component-config/routes.ts'
 
 // Passport 的类型需要合并全局 Express.User，空接口继承在这里用于声明扩展。
 // eslint-disable-next-line @typescript-eslint/no-namespace, @typescript-eslint/no-empty-object-type
@@ -28,6 +30,7 @@ export interface AuthServerOptions {
     appOrigin: string
     sessionTtlMs?: number
     secureCookies?: boolean
+    componentConfigRepository?: ComponentConfigRepository
 }
 class RequestError extends Error {
     readonly status: number
@@ -210,6 +213,8 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
         if (target.role === 'admin' || target.userId === req.user!.userId) throw new RequestError(403, '只能修改普通用户的状态')
         res.json(await auth.setDisabled(userId, disabled))
     })
+    app.use(createComponentConfigRouter({ repository: options.componentConfigRepository, authenticated, administrator,
+        error: (status, message) => new RequestError(status, message) }))
     app.use((_req, res) => res.status(404).json({ message: '接口不存在' }))
     app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
         if (res.headersSent) return
