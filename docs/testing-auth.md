@@ -35,7 +35,8 @@
 | JSON 与请求大小 | 非 JSON、错误 Content-Type、大请求体 | 返回 400/415/413 等受控状态 |
 | SQL 注入 | 正文包含引号、问号和 SQL 语句；账号含注入样式 | 正文作为字面量保存；账号校验；无越权、表损坏 |
 | XSS | 正文保存 `<img src=x onerror=...>`、`<script>...</script>` | 列表、归档、详情显示文本，无脚本执行或新 HTML 节点 |
-| CSRF | 跨站 Origin 发起携带 Cookie 的写操作 | 被拒绝；合法同源请求可用 |
+| 开发端口登录 | 从 5173、5174 或 localhost 登录，也允许无 Origin 的 API 客户端 | 正确凭据可登录；错误凭据仍返回 401，不提示来源不受信任 |
+| 浏览器跨站写请求 | 跨站表单、文本提交或跨站 JSON 预检 | 非 JSON 返回 415；后端不开放 CORS 预检；Cookie 为 SameSite=Strict；不再按 Origin 白名单拒绝 API 客户端 |
 | 密码哈希 | 检查两账号相同密码的存储值 | 不存明文；带独立盐；不是普通 SHA-256 直接散列 |
 | 会话存储 | 检查服务端会话凭据字段 | 数据库不保存可直接复用的原始会话凭据 |
 | Cookie | 检查登录响应 Cookie | HttpOnly、合适的 SameSite 和 Path；生产 HTTPS 时 Secure |
@@ -90,3 +91,12 @@
 - 用户决定本阶段 SMTP 凭据先留空；`npm run mail:check` 如实报告配置不完整，未发送真实邮件。真实 Brevo 邮箱验证及找回收件流程留待填写凭据后验收，不能视为通过。
 
 本机原生压缩器出现 SIGBUS，构建改用 Terser 和 esbuild CSS 压缩后通过。运行依赖审计无已知漏洞；开发 lint 依赖的 braces 递归漏洞链仍待兼容发布修复，详见 README。
+
+## 2026-10-13 默认端口登录修复
+
+- 按需求移除写接口的 Origin 白名单比对；`APP_ORIGIN` 仅用于邮件链接。JSON Content-Type、HttpOnly/SameSite=Strict Cookie、鉴权、限流和用户隔离仍保留，未开放 CORS。
+- `npm run test:unit -- --run tests/security-http.spec.ts src/__tests__/server.spec.ts`：25 项通过。覆盖 5173、localhost、其他开发端口、无 Origin 客户端的正确登录，以及错误密码、非 JSON 写请求和 CORS 预检。
+- `npm run test:integration`：真实 MySQL/HTTP 验收通过，3 个临时测试账号及其数据、会话已清理。
+- 经 Vite 的 5173 `/api` 代理以实际管理员登录，127.0.0.1 与 localhost 来源均返回 200，读取会话也返回 200；验证用 HTTP 会话已退出。
+- 浏览器在 `http://localhost:5173` 实际输入账号、提交登录、刷新，确认首页、管理员用户名和用户管理入口可见，无来源不受信任提示；已保存截图。
+- 修改文件的 ESLint 和 `git diff --check` 通过。`npm run type-check` 未通过：未修改的 `backend/auth/session-store.ts:10` 存在两份 MySQL Pool 类型不兼容，当前会话库类型依赖 mysql2 3.9.8，项目依赖为 3.24.4。此项留待统一依赖版本后复查，本轮未修改原有 pnpm 配置及锁文件。

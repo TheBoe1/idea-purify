@@ -124,13 +124,33 @@ describe('独立鉴权与用户隔离 HTTP 验收', () => {
     expect((await a.account.request('/ideas/1%20OR%201=1')).status).toBe(404)
   })
 
-  it('跨站或缺少 Origin 的副作用请求不能创建账号或修改数据', async () => {
-    const account = client()
-    for (const requestOrigin of [null, 'https://attacker.example']) {
-      expect((await account.request('/auth/register', 'POST', { username: 'victim', password }, requestOrigin)).status).toBe(403)
+  it('5173、其他开发来源和缺少 Origin 的请求都能登录，错误凭据仍被拒绝', async () => {
+    await register('user_a')
+    for (const requestOrigin of ['http://127.0.0.1:5173', 'http://localhost:5173', origin, null]) {
+      const account = client()
+      const response = await account.request('/auth/login', 'POST', { username: 'user_a', password }, requestOrigin)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ username: 'user_a', role: 'user' })
+      expect((await account.request('/auth/session')).status).toBe(200)
+      expect((await account.request('/auth/logout', 'POST', {}, requestOrigin)).status).toBe(200)
+    }
+    const response = await client().request('/auth/login', 'POST', { username: 'user_a', password: 'Incorrect password phrase!' }, 'http://127.0.0.1:5173')
+    expect(response.status).toBe(401)
+    expect((await response.json()).message).not.toContain('请求来源不受信任')
+  })
+
+  it('浏览器表单和文本写请求仍被拒绝，不开放跨站 JSON 请求的 CORS 预检', async () => {
+    for (const contentType of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data']) {
+      const response = await fetch(`${base}/auth/register`, { method: 'POST',
+        headers: { Origin: 'https://attacker.example', 'Content-Type': contentType },
+        body: JSON.stringify({ username: 'victim', password }) })
+      expect(response.status).toBe(415)
     }
     expect(fixture.users.size).toBe(0)
-    expect((await fetch(`${base}/auth/register`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'text/plain' }, body: '{}' })).status).toBe(415)
+    const preflight = await fetch(`${base}/auth/register`, { method: 'OPTIONS', headers: {
+      Origin: 'https://attacker.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type',
+    } })
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
   it('退出登录撤销原始会话，管理员禁用立即使旧会话与密码登录失效', async () => {

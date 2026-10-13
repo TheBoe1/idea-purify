@@ -36,7 +36,7 @@ export function getSmtpConfiguration() {
 export function getAuthConfiguration() {
     const origin = new URL(required('APP_ORIGIN'))
     if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash || origin.username || origin.password) {
-        throw new Error('APP_ORIGIN 必须是完整站点来源，例如 http://127.0.0.1:5174，不包含路径')
+        throw new Error('APP_ORIGIN 必须是完整站点来源，例如 http://127.0.0.1:5173，不包含路径')
     }
     const sessionSecret = required('SESSION_SECRET')
     if (sessionSecret.length < 32 || /^(replace-with|change-me)/i.test(sessionSecret)) {

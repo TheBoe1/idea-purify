@@ -83,7 +83,6 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
         message: { message: '请求过于频繁，请稍后再试' } }))
     app.use((req, _res, next) => {
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-            if (req.get('origin') !== options.appOrigin) return next(new RequestError(403, '请求来源不受信任'))
             if (req.get('content-type')?.split(';')[0]?.trim() !== 'application/json') return next(new RequestError(415, '请使用 application/json 提交'))
         }
         next()

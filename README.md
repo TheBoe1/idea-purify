@@ -16,10 +16,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER ON Ideasource.* TO 'idea_pur
 ```
 
 3. 复制 `.env.example` 为 `.env.local`，填写本机配置。真实密码不提交到 Git，也不使用 `VITE_` 前缀。
-4. 配置随机 `SESSION_SECRET`，把 `APP_ORIGIN` 设为浏览器实际地址（协议、主机、端口完全相同）。端口被占用导致 Vite 改用 5174 时，也要同步修改 Origin 并重启后端。
+4. 配置随机 `SESSION_SECRET`。`APP_ORIGIN` 用于生成邮箱验证和密码重设链接，本地默认 `http://127.0.0.1:5173`；它不用于请求来源校验。需要发送邮件时，将它设为收件人能够打开的前端地址。
 5. 运行 `npm run db:init` 创建或兼容已有表。原有匿名想法保留为未认领记录，不向任何账号显示。
 6. 如需导入原有 JSON 想法，运行 `npm run db:import-json`。只向空表导入；表已有数据时跳过，避免重复。导入记录同样保持未认领。JSON 文件只作为历史备份，运行时不再读写它。
-7. 运行 `npm run dev`，打开与 `APP_ORIGIN` 对应的 Vite 地址，然后注册普通用户。
+7. 运行 `npm run dev`，打开 Vite 输出的地址（默认端口 5173），然后注册普通用户。Vite 自动改用其他端口时，登录不会因来源不匹配被拦截。
 
 如果 MySQL 运行在 Docker 中，服务端可能将本机连接识别为容器网关 IP。本机目前是 `172.18.0.1`，已为专用账号配置这个来源；其他机器应按实际登录错误中的主机地址授权，仍只授予项目数据库权限。
 
@@ -45,7 +45,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER ON Ideasource.* TO 'idea_pur
 
 密码使用 Argon2id，随机盐和 256 位摘要由库生成，数据库保存完整算法、参数、盐、摘要，不能还原原密码。想法正文正常保存，使用参数化 SQL 和 Vue 文本转义；不会用删除引号或尖括号的方式损坏内容。
 
-Passport 与 express-session 管理登录会话，MySQL 持久保存，Cookie 使用 HttpOnly 和 SameSite。生产部署必须使用 HTTPS 并设置 `COOKIE_SECURE=true`。副作用接口严格检查 `APP_ORIGIN` 与 JSON Content-Type；不要将反向代理的来源配置为任意网站。登录有请求频率限制；当前限流存储位于单个 Node 进程，多实例部署需要接共享限流存储。
+Passport 与 express-session 管理登录会话，MySQL 持久保存，Cookie 使用 HttpOnly 和 SameSite=Strict。生产部署必须使用 HTTPS 并设置 `COOKIE_SECURE=true`。写接口不校验 Origin，但仍只接受 JSON Content-Type；浏览器表单和文本提交会返回 415。后端没有开放 CORS，浏览器不能直接从其他站点发起跨站 JSON 写请求；前端通过同源 `/api` 代理访问。若未来开放 CORS，应同步设计 CSRF 防护。登录有请求频率限制；当前限流存储位于单个 Node 进程，多实例部署需要接共享限流存储。
 
 当前 Node 监听本机 HTTP，未信任代理转发头。未来经 HTTPS 反向代理部署时，还需明确配置固定可信代理并验证 Secure Cookie 能正常下发；不能直接开启无范围的 `trust proxy`。本阶段验收的是本机开发流程。
 
