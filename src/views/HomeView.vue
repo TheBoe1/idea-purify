@@ -21,12 +21,16 @@ function updateDraft(value: string) {
 
 const handleSubmit = async (ideaContent: string) => {
     if (submitting.value) return
+    const submittedOwnerId = authState.user?.userId
+    const submittedDraft = draft.ideaContent
 
     submitting.value = true
     saved.value = false
     errorMessage.value = ''
     try {
         await createIdea({ ideaContent })
+        // 请求返回前可能已换账号或写入新草稿，旧响应只结束自己的提交。
+        if (!submittedOwnerId || authState.user?.userId !== submittedOwnerId || draft.ownerId !== submittedOwnerId || draft.ideaContent !== submittedDraft) return
         draft.ideaContent = ''
         saved.value = true
         ElNotification({ title: '保存成功', message: '可以在归档中查看这条想法', type: 'success' })

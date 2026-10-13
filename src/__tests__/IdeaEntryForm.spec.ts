@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElNotification } from 'element-plus'
 import IdeaEntryForm from '../components/ideas/IdeaEntryForm.vue'
 import HomeView from '../views/HomeView.vue'
 import { authState } from '../stores/auth'
@@ -11,7 +11,13 @@ import type { Idea } from '../../shared/contracts/idea.ts'
 const wrappers: ReturnType<typeof mount>[] = []
 const savedIdea: Idea = { ideaId: '31', ideaContent: '用户想法', createdTime: '2026-10-13T08:00:00Z' }
 
+vi.mock('element-plus', async importOriginal => {
+  const actual = await importOriginal<typeof import('element-plus')>()
+  return { ...actual, ElNotification: vi.fn() }
+})
+
 beforeEach(() => {
+  vi.clearAllMocks()
   clearIdeaDraft()
   Object.assign(authState, { user: { userId: 'form-user', username: 'form_user', role: 'user' }, ready: true })
 })
@@ -116,5 +122,36 @@ describe('Home 页面提交编排', () => {
     expect((wrapper.get('#idea-input').element as HTMLInputElement).value).toBe('失败后需要保留的内容')
     expect((wrapper.get('#idea-input').element as HTMLInputElement).disabled).toBe(false)
     expect(wrapper.text()).not.toContain('想法已保存')
+  })
+
+  it('上一账号的延迟创建结果不能清除新账号草稿或显示旧成功反馈', async () => {
+    let complete!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise(resolve => { complete = resolve })))
+    const wrapper = await renderHome()
+    await wrapper.get('#idea-input').setValue('上一账号提交的想法')
+    await submitButton(wrapper).trigger('click')
+    Object.assign(authState, { user: { userId: 'second-user', username: 'second_user', role: 'user' } })
+    ideaDraft.ownerId = 'second-user'
+    ideaDraft.ideaContent = '新账号尚未提交的想法'
+    complete(Response.json(savedIdea, { status: 201 }))
+    await flushPromises()
+    expect(ideaDraft.ownerId).toBe('second-user')
+    expect(ideaDraft.ideaContent).toBe('新账号尚未提交的想法')
+    expect(wrapper.text()).not.toContain('想法已保存')
+    expect(ElNotification).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }))
+  })
+
+  it('同一账号提交后产生的新草稿也不被旧请求成功结果清空', async () => {
+    let complete!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise(resolve => { complete = resolve })))
+    const wrapper = await renderHome()
+    await wrapper.get('#idea-input').setValue('原先提交的想法')
+    await submitButton(wrapper).trigger('click')
+    ideaDraft.ideaContent = '等待期间从其他入口更新的草稿'
+    complete(Response.json(savedIdea, { status: 201 }))
+    await flushPromises()
+    expect(ideaDraft.ideaContent).toBe('等待期间从其他入口更新的草稿')
+    expect((wrapper.get('#idea-input').element as HTMLInputElement).disabled).toBe(false)
+    expect(ElNotification).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }))
   })
 })
