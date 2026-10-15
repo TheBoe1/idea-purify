@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import type http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -49,7 +50,7 @@ beforeEach(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   for (const username of ['config_admin', 'config_user']) {
     const response = await request('/auth/login', '', 'POST', { username, password })
-    expect(response.status).toBe(200)
+    assert.equal(response.status, 200)
     const cookie = response.headers.getSetCookie()[0]!.split(';')[0]!
     if (username === 'config_admin') adminCookie = cookie
     else userCookie = cookie
@@ -57,13 +58,14 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  vi.restoreAllMocks()
 })
 
 describe('共享组件配置 HTTP 验收', () => {
-  it('匿名读写均为 401，普通用户只有读取权限', async () => {
+  it('匿名读写均为 401，普通用户也不能读取管理草稿', async () => {
     for (const path of ['/component-definitions', '/component-configs', `/component-configs/${configId}`]) {
       expect((await request(path)).status).toBe(401)
-      expect((await request(path, userCookie)).status).toBe(200)
+      expect((await request(path, userCookie)).status).toBe(403)
     }
     for (const [path, method] of [['/admin/component-configs', 'POST'], [`/admin/component-configs/${configId}`, 'PUT']] as const) {
       expect((await request(path, '', method, { schema })).status).toBe(401)
@@ -73,13 +75,13 @@ describe('共享组件配置 HTTP 验收', () => {
     expect(repository.update).not.toHaveBeenCalled()
   })
 
-  it('管理员创建返回保存记录，归属使用真实会话；普通用户可以复用相同配置', async () => {
+  it('管理员创建返回保存记录，归属使用真实会话；管理员可以重新读取草稿', async () => {
     const response = await request('/admin/component-configs', adminCookie, 'POST', { schema })
     expect(response.status).toBe(201)
     expect(await response.json()).toEqual(result)
     expect(repository.create).toHaveBeenCalledWith(adminId, schema)
-    expect(await (await request('/component-configs', userCookie)).json()).toEqual([result])
-    expect(await (await request(`/component-configs/${configId}`, userCookie)).json()).toEqual(result)
+    expect(await (await request('/component-configs', adminCookie)).json()).toEqual([result])
+    expect(await (await request(`/component-configs/${configId}`, adminCookie)).json()).toEqual(result)
   })
 
   it('更新既有实例返回同一 ID，不提供删除 API', async () => {
@@ -104,27 +106,47 @@ describe('共享组件配置 HTTP 验收', () => {
   it('未知 UUID 返回 404，非法 ID 不传入 Repository', async () => {
     repository.find.mockResolvedValue(null)
     repository.update.mockResolvedValue(null)
-    expect((await request(`/component-configs/${configId}`, userCookie)).status).toBe(404)
+    expect((await request(`/component-configs/${configId}`, adminCookie)).status).toBe(404)
     expect((await request(`/admin/component-configs/${configId}`, adminCookie, 'PUT', { schema })).status).toBe(404)
     repository.find.mockClear()
     repository.update.mockClear()
     for (const id of ['unknown', '1%20OR%201=1', '../../script']) {
-      expect((await request(`/component-configs/${id}`, userCookie)).status).toBe(404)
+      expect((await request(`/component-configs/${id}`, adminCookie)).status).toBe(404)
       expect((await request(`/admin/component-configs/${id}`, adminCookie, 'PUT', { schema })).status).toBe(404)
     }
     expect(repository.find).not.toHaveBeenCalled()
     expect(repository.update).not.toHaveBeenCalled()
   })
 
-  it('数据库失败返回 503 且不泄露内部 SQL、连接账号或密码', async () => {
-    const internal = new Error('SELECT secret FROM component_config; user=internal password=private')
+  it('数据库失败安全返回 503，日志只包含路由模板与允许的技术代码', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const internal = Object.assign(new Error('SELECT secret FROM component_config; user=internal password=private'),
+      { code: 'ER_LOCK_DEADLOCK', sql: 'SELECT private', params: ['private'], name: 'private-error-name' })
     repository.create.mockRejectedValue(internal)
-    repository.list.mockRejectedValue(internal)
-    for (const response of [await request('/admin/component-configs', adminCookie, 'POST', { schema }), await request('/component-configs', userCookie)]) {
+    repository.update.mockRejectedValue(internal)
+    repository.find.mockRejectedValue(internal)
+    for (const response of [await request('/admin/component-configs', adminCookie, 'POST', { schema }),
+      await request(`/admin/component-configs/${configId}?password=private`, adminCookie, 'PUT', { schema }),
+      await request(`/component-configs/${configId}?token=private`, adminCookie)]) {
       expect(response.status).toBe(503)
       const body = await response.json()
       expect(body).toEqual({ message: '服务暂时不可用，请稍后重试' })
       expect(JSON.stringify(body)).not.toContain('SELECT')
     }
+    expect(log.mock.calls.map(([value]) => JSON.parse(value as string))).toEqual([
+      { event: 'request_failed', method: 'POST', route: '/admin/component-configs', errorCode: 'ER_LOCK_DEADLOCK', errorType: 'Error' },
+      { event: 'request_failed', method: 'PUT', route: '/admin/component-configs/:configId', errorCode: 'ER_LOCK_DEADLOCK', errorType: 'Error' },
+      { event: 'request_failed', method: 'GET', route: '/component-configs/:configId', errorCode: 'ER_LOCK_DEADLOCK', errorType: 'Error' },
+    ])
+    const printed = JSON.stringify(log.mock.calls)
+    for (const sensitive of ['SELECT', 'internal', 'private', configId, schema.name]) expect(printed).not.toContain(sensitive)
+  })
+
+  it('未经允许的错误 code 不作为日志内容输出', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    repository.list.mockRejectedValue(Object.assign(new Error('password=private'), { code: 'SELECT secret; password=private' }))
+    expect((await request('/component-configs', adminCookie)).status).toBe(503)
+    expect(log.mock.calls).toEqual([[JSON.stringify({ event: 'request_failed', method: 'GET', route: '/component-configs',
+      errorCode: 'UNKNOWN', errorType: 'Error' })]])
   })
 })

@@ -8,7 +8,7 @@ import { Strategy as LocalStrategy } from 'passport-local'
 import { rateLimit } from 'express-rate-limit'
 import helmet from 'helmet'
 import { getIdeaContentError, isCreateIdeaRequest } from '../shared/contracts/idea.ts'
-import { getUsernameError, getPasswordError, getEmailError } from '../shared/contracts/auth.ts'
+import { getUsernameError, getPasswordError, getEmailError, getNicknameError } from '../shared/contracts/auth.ts'
 import type { IdeaRepository } from './db/ideas.ts'
 import type { AuthRepository, UserRecord, EmailTokenPurpose } from './db/auth.ts'
 import { publicUser } from './auth/user.ts'
@@ -16,6 +16,8 @@ import { hashPassword, verifyPassword } from './auth/password.ts'
 import type { Mailer } from './auth/mail.ts'
 import type { ComponentConfigRepository } from './db/component-configs.ts'
 import { createComponentConfigRouter } from './component-config/routes.ts'
+import type { WorkbenchRepository } from './db/workbench.ts'
+import { createWorkbenchRouter } from './component-config/workbench-routes.ts'
 
 // Passport 的类型需要合并全局 Express.User，空接口继承在这里用于声明扩展。
 // eslint-disable-next-line @typescript-eslint/no-namespace, @typescript-eslint/no-empty-object-type
@@ -31,6 +33,7 @@ export interface AuthServerOptions {
     sessionTtlMs?: number
     secureCookies?: boolean
     componentConfigRepository?: ComponentConfigRepository
+    workbenchRepository?: WorkbenchRepository
 }
 class RequestError extends Error {
     readonly status: number
@@ -38,6 +41,20 @@ class RequestError extends Error {
 }
 const dummyHash = hashPassword('invalid-account-dummy-comparison')
 const digest = (token: string) => createHash('sha256').update(token).digest()
+const diagnosticCodes = new Set(['ER_PARSE_ERROR', 'ER_ACCESS_DENIED_ERROR', 'ER_BAD_DB_ERROR', 'ER_NO_SUCH_TABLE',
+    'ER_BAD_FIELD_ERROR', 'ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT', 'ER_DATA_TOO_LONG', 'ER_TRUNCATED_WRONG_VALUE',
+    'PROTOCOL_CONNECTION_LOST', 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH'])
+const diagnosticMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+function logUnexpectedFailure(error: unknown, req: Request): void {
+    const code: unknown = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+    // route.path 是代码注册的模板；不读取动态 URL、参数、正文或 Error 的 message/stack/name。
+    const route: unknown = req.route?.path
+    const errorType = error instanceof TypeError ? 'TypeError' : error instanceof RangeError ? 'RangeError'
+        : error instanceof SyntaxError ? 'SyntaxError' : error instanceof Error ? 'Error' : 'UnknownError'
+    console.error(JSON.stringify({ event: 'request_failed', method: diagnosticMethods.has(req.method) ? req.method : 'OTHER',
+        route: typeof route === 'string' ? route : 'request-pipeline',
+        errorCode: typeof code === 'string' && diagnosticCodes.has(code) ? code : 'UNKNOWN', errorType }))
+}
 function body(req: Request): Record<string, unknown> {
     const value: unknown = req.body
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new RequestError(400, '请求体必须是 JSON 对象')
@@ -77,6 +94,8 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
     const app = express()
     const auth = options.authRepository
     const passport = new Passport()
+    const expiredAuthenticationRequests = new WeakSet<Request>()
+    const revokedSessionRequests = new WeakSet<Request>()
     const ttl = options.sessionTtlMs ?? 8 * 60 * 60 * 1000
     const cookieName = 'idea_purify.sid'
     app.disable('x-powered-by')
@@ -90,15 +109,28 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
         }
         next()
     })
-    app.use(express.json({ limit: '16kb', strict: false }))
+    const smallJson = express.json({ limit: '16kb', strict: false })
+    const configurationJson = express.json({ limit: '256kb', strict: false })
+    app.use((req, res, next) => {
+        const configurationRequest = /^\/admin\/(?:templates|page-configs|component-configs)(?:\/|$)/.test(req.path)
+        return (configurationRequest ? configurationJson : smallJson)(req, res, next)
+    })
     app.use(session({ name: cookieName, secret: options.sessionSecret, store: options.sessionStore,
         resave: false, saveUninitialized: false, rolling: false, genid: () => randomBytes(32).toString('base64url'),
         cookie: { httpOnly: true, sameSite: 'strict', secure: options.secureCookies ?? false, maxAge: ttl, path: '/' },
     }))
-    app.use((req, res, next) => {
-        if (req.session.authenticatedAt && Date.now() - req.session.authenticatedAt >= ttl) {
-            req.session.regenerate(error => { req.user = undefined; res.clearCookie(cookieName, { path: '/' }); next(error) })
-        } else next()
+    function invalidateSession(req: Request, next: NextFunction) {
+        if (req.method === 'POST' && ['/auth/login', '/auth/register'].includes(req.path)) {
+            expiredAuthenticationRequests.add(req)
+            req.session.regenerate(error => { req.user = undefined; next(error) })
+        } else {
+            // 旧 401 可能晚于新登录到达。撤销旧 SID 后直接返回，不清 Cookie 或生成匿名 SID。
+            req.session.destroy(error => { req.user = undefined; next(error ?? new RequestError(401, '登录状态已失效，请重新登录')) })
+        }
+    }
+    app.use((req, _res, next) => {
+        if (req.session.authenticatedAt && Date.now() - req.session.authenticatedAt >= ttl) invalidateSession(req, next)
+        else next()
     })
     passport.use(new LocalStrategy(async (username, password, done) => {
         try {
@@ -108,14 +140,21 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
         } catch (error) { done(error) }
     }))
     passport.serializeUser((user, done) => done(null, { userId: user.userId, authVersion: user.authVersion }))
-    passport.deserializeUser(async (identity: { userId: string; authVersion: number }, done) => {
+    passport.deserializeUser<{ userId: string; authVersion: number }, Request>(async (req, identity, done) => {
         try {
             const user = await auth.findById(identity.userId)
-            done(null, user && !user.disabled && user.authVersion === identity.authVersion ? user : false)
+            const valid = user && !user.disabled && user.authVersion === identity.authVersion
+            if (!valid) revokedSessionRequests.add(req)
+            done(null, valid ? user : false)
         } catch (error) { done(error) }
     })
     app.use(passport.initialize())
     app.use(passport.session())
+    app.use((req, _res, next) => {
+        // Passport 删除失效身份会修改旧 session；在响应头发送前销毁它，阻止重新下发旧 SID。
+        if (revokedSessionRequests.has(req)) { revokedSessionRequests.delete(req); invalidateSession(req, next) }
+        else next()
+    })
     const limitedAuth = rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false,
         message: { message: '账户操作过于频繁，请 15 分钟后再试' } })
     const limitedMail = rateLimit({ windowMs: 15 * 60_000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false,
@@ -151,6 +190,16 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
         })(req, res, next)
     })
     app.get('/auth/session', authenticated, (req, res) => res.json(publicUser(req.user!)))
+    app.patch('/auth/profile', authenticated, async (req, res) => {
+        const input = body(req)
+        if (Object.keys(input).some(key => key !== 'nickname') || typeof input.nickname !== 'string') throw new RequestError(400, '请仅提交 nickname 昵称字段')
+        const nickname = input.nickname.trim()
+        const error = getNicknameError(nickname)
+        if (error) throw new RequestError(400, error)
+        const user = await auth.updateNickname(req.user!.userId, nickname)
+        if (!user) throw new RequestError(401, '登录状态已失效，请重新登录')
+        res.json(user)
+    })
     app.post('/auth/logout', (req, res, next) => {
         req.session.destroy(error => {
             if (error) { next(error); return }
@@ -215,14 +264,24 @@ export function createIdeaServer(repository: IdeaRepository, options: AuthServer
     })
     app.use(createComponentConfigRouter({ repository: options.componentConfigRepository, authenticated, administrator,
         error: (status, message) => new RequestError(status, message) }))
+    app.use(createWorkbenchRouter({ repository: options.workbenchRepository, authenticated, administrator,
+        error: (status, message) => new RequestError(status, message) }))
     app.use((_req, res) => res.status(404).json({ message: '接口不存在' }))
-    app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    app.use((error: unknown, req: Request, _res: Response, next: NextFunction) => {
+        if (expiredAuthenticationRequests.has(req) && !req.user && req.session) {
+            // 过期 Cookie 可直接重新登录；失败时删除临时匿名会话，避免它覆盖另一请求的新登录。
+            expiredAuthenticationRequests.delete(req)
+            req.session.destroy(destroyError => next(destroyError ?? error))
+        } else next(error)
+    })
+    app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
         if (res.headersSent) return
         if (error instanceof RequestError) { res.status(error.status).json({ message: error.message }); return }
         const detail = error as { type?: string; code?: string }
         if (detail?.type === 'entity.too.large') { res.status(413).json({ message: '提交的内容过大' }); return }
         if (detail?.type === 'entity.parse.failed') { res.status(400).json({ message: '请求体必须是有效的 JSON' }); return }
         if (detail?.code === 'ER_DUP_ENTRY') { res.status(409).json({ message: '用户名或邮箱已被使用' }); return }
+        logUnexpectedFailure(error, req)
         res.status(503).json({ message: '服务暂时不可用，请稍后重试' })
     })
     const server = http.createServer(app)

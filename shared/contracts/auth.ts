@@ -3,6 +3,7 @@ export type UserRole = 'user' | 'admin'
 export interface AuthUser {
   userId: string
   username: string
+  nickname?: string | null
   email: string | null
   emailVerified: boolean
   role: UserRole
@@ -34,6 +35,12 @@ export function getPasswordError(password: string): string | undefined {
   if (password.length < 12 || password.length > 128) return '密码需为 12–128 个字符'
 }
 
+export function getNicknameError(nickname: string): string | undefined {
+  const value = nickname.trim()
+  if (Array.from(value).length < 1 || Array.from(value).length > 40) return '昵称需为 1–40 个字符'
+  if (/[\p{Cc}\p{Cf}]/u.test(value)) return '昵称不能包含控制或隐藏字符'
+}
+
 export function getEmailError(email: string): string | undefined {
   if (email.length > 254 || !/^[\x21-\x7e]+$/.test(email)
     || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)) return '请输入有效邮箱地址（使用英文邮箱地址）'
@@ -44,6 +51,7 @@ export function isAuthUser(value: unknown): value is AuthUser {
   const user = value as Record<string, unknown>
   return typeof user.userId === 'string' && user.userId.length > 0
     && typeof user.username === 'string'
+    && (user.nickname === undefined || user.nickname === null || typeof user.nickname === 'string')
     && (typeof user.email === 'string' || user.email === null)
     && typeof user.emailVerified === 'boolean'
     && (user.role === 'user' || user.role === 'admin')

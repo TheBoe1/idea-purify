@@ -80,7 +80,9 @@ try {
   assert.equal((await anonymous.request('/component-configs')).status, 401, 'Anonymous config read must be protected')
   assert.equal((await admin.request('/auth/login', 'POST', { username: names[0], password })).status, 200)
   assert.equal((await normal.request('/auth/login', 'POST', { username: names[1], password })).status, 200)
-  const definitions = await (await normal.request('/component-definitions')).json() as { componentKey: string }[]
+  assert.equal((await normal.request('/component-definitions')).status, 403, 'Normal user must not read management definitions')
+  assert.equal((await normal.request('/component-configs')).status, 403, 'Normal user must not read drafts')
+  const definitions = await (await admin.request('/component-definitions')).json() as { componentKey: string }[]
   assert.deepEqual(definitions.map(item => item.componentKey).sort(), COMPONENT_DEFINITIONS.map(item => item.componentKey).sort())
 
   const schema: ComponentSchema = { schemaVersion: 1, libraryKey: 'element-plus', componentKey: 'input',
@@ -91,8 +93,8 @@ try {
   const saved = await readConfig(await admin.request('/admin/component-configs', 'POST', { schema }), 201)
   configIds.add(saved.configId)
   assert.deepEqual(saved.schema, schema, 'Prepared SQL must preserve text without executing it')
-  const again = await readConfig(await normal.request(`/component-configs/${saved.configId}`), 200)
-  assert.deepEqual(again, saved, 'Saved config must reload from real MySQL for another logged-in user')
+  const again = await readConfig(await admin.request(`/component-configs/${saved.configId}`), 200)
+  assert.deepEqual(again, saved, 'Saved legacy config must reload for an administrator')
   const second = await readConfig(await admin.request('/admin/component-configs', 'POST', { schema: { ...schema, name: `${prefix}_second` } }), 201)
   configIds.add(second.configId)
   assert.notEqual(second.configId, saved.configId, 'One component definition must support multiple instances')
@@ -101,7 +103,7 @@ try {
   const updated = await readConfig(await admin.request(`/admin/component-configs/${saved.configId}`, 'PUT', { schema: updatedSchema }), 200)
   assert.equal(updated.configId, saved.configId)
   assert.equal(updated.createdTime, saved.createdTime)
-  assert.deepEqual((await readConfig(await normal.request(`/component-configs/${saved.configId}`), 200)).schema, updatedSchema)
+  assert.deepEqual((await readConfig(await admin.request(`/component-configs/${saved.configId}`), 200)).schema, updatedSchema)
   assert.equal((await normal.request(`/admin/component-configs/${saved.configId}`, 'PUT', { schema })).status, 403)
   const [owners] = await db.execute<RowDataPacket[]>('SELECT created_by, updated_by FROM component_config WHERE id = ?', [saved.configId])
   assert.equal(owners[0]?.created_by, adminId, 'Create audit identity must come from administrator session')
@@ -112,7 +114,7 @@ try {
     actions: [{ event: 'click', actionKey: 'show-message', message: '固定提示，仅文本' }] }
   const savedButton = await readConfig(await admin.request('/admin/component-configs', 'POST', { schema: button }), 201)
   configIds.add(savedButton.configId)
-  assert.deepEqual((await readConfig(await normal.request(`/component-configs/${savedButton.configId}`), 200)).schema, button)
+  assert.deepEqual((await readConfig(await admin.request(`/component-configs/${savedButton.configId}`), 200)).schema, button)
   assert.equal((await admin.request('/admin/component-configs', 'POST', { schema: { ...schema, props: { onInput: 'alert(1)' } } })).status, 400)
   assert.equal((await admin.request('/admin/component-configs', 'POST', { schema, createdBy: normalId })).status, 400)
   const [rows] = await db.execute<RowDataPacket[]>('SELECT id FROM component_config WHERE created_by = ?', [adminId])
@@ -121,15 +123,15 @@ try {
   // Corrupt only this test's instance to confirm persistence validation is enforced on reads.
   await db.execute('UPDATE component_config SET schema_json = ? WHERE id = ? AND created_by = ?',
     [JSON.stringify({ ...updatedSchema, schemaVersion: 99 }), saved.configId, adminId])
-  const corrupt = await normal.request(`/component-configs/${saved.configId}`)
+  const corrupt = await admin.request(`/component-configs/${saved.configId}`)
   assert.equal(corrupt.status, 503, 'Invalid stored schema must return safe error')
   assert.deepEqual(await corrupt.json(), { message: '服务暂时不可用，请稍后重试' })
   await db.execute('UPDATE component_config SET schema_json = ? WHERE id = ? AND created_by = ?', [JSON.stringify(updatedSchema), saved.configId, adminId])
-  assert.equal((await normal.request(`/component-configs/${saved.configId}`)).status, 200)
+  assert.equal((await admin.request(`/component-configs/${saved.configId}`)).status, 200)
   assert.equal(await definitionSnapshot(), definitionsBefore, 'Instance writes must not mutate component definitions')
   assert.equal(await ideaSnapshot(), ideasBefore, 'Configuration flows must not mutate existing idea rows')
   completed = true
-  console.log('PASS: real MySQL config create/update/reload, shared read/admin write, parameterized text, separate definitions/instances, stored-schema safety and all existing Idea rows preserved')
+  console.log('PASS: real MySQL config create/update/reload, administrator-only drafts, parameterized text, separate definitions/instances, stored-schema safety and all existing Idea rows preserved')
 } catch (error) {
   const code = error instanceof Error && 'code' in error ? String(error.code) : error instanceof Error ? error.name : 'UNKNOWN'
   console.error('FAIL: MySQL component config smoke:', code)

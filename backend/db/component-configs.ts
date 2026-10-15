@@ -19,7 +19,12 @@ interface ConfigRow extends RowDataPacket {
   createdTime: Date
   updatedTime: Date
 }
-interface DefinitionRow extends RowDataPacket { componentKey: string; metadata: unknown }
+interface DefinitionRow extends RowDataPacket {
+  componentKey: string
+  libraryKey: string
+  schemaVersion: number
+  metadata: unknown
+}
 const columns = 'id AS configId, component_key AS componentKey, schema_version AS schemaVersion, schema_json AS configSchema, created_time AS createdTime, updated_time AS updatedTime'
 
 function json(value: unknown): unknown { return typeof value === 'string' ? JSON.parse(value) : value }
@@ -50,11 +55,13 @@ export async function seedComponentDefinitions(): Promise<void> {
 
 export const componentConfigRepository: ComponentConfigRepository = {
   async listDefinitions() {
-    const [rows] = await db.query<DefinitionRow[]>('SELECT component_key AS componentKey, metadata_json AS metadata FROM component_definition ORDER BY component_key ASC')
+    const [rows] = await db.query<DefinitionRow[]>('SELECT component_key AS componentKey, library_key AS libraryKey, schema_version AS schemaVersion, metadata_json AS metadata FROM component_definition WHERE schema_version = 1 ORDER BY component_key ASC')
     return rows.map(row => {
       const definition = COMPONENT_DEFINITIONS.find(item => item.componentKey === row.componentKey)
       const stored = json(row.metadata)
-      if (!definition || !isComponentDefinition(stored) || stored.componentKey !== row.componentKey) throw new Error('数据库组件定义无效')
+      if (!definition || !isComponentDefinition(stored) || stored.componentKey !== row.componentKey
+        || row.libraryKey !== definition.libraryKey || row.schemaVersion !== definition.schemaVersion
+        || stored.libraryKey !== row.libraryKey || stored.schemaVersion !== row.schemaVersion) throw new Error('数据库组件定义无效')
       // 返回代码安装的定义，数据库元数据从不决定可执行实现。
       return definition
     })
@@ -84,10 +91,10 @@ export const componentConfigRepository: ComponentConfigRepository = {
     const connection = await db.getConnection()
     try {
       await connection.beginTransaction()
-      const [existing] = await connection.execute<RowDataPacket[]>('SELECT id FROM component_config WHERE id = ? FOR UPDATE', [configId])
+      const [existing] = await connection.execute<RowDataPacket[]>('SELECT id FROM component_config WHERE id = ? AND schema_version = 1 FOR UPDATE', [configId])
       if (!existing.length) { await connection.rollback(); return null }
       const [result] = await connection.execute<ResultSetHeader>(
-        'UPDATE component_config SET component_key = ?, schema_version = ?, schema_json = ?, updated_by = ?, updated_time = ? WHERE id = ? AND EXISTS (SELECT 1 FROM component_definition WHERE component_key = ? AND library_key = ? AND schema_version = ?)',
+        'UPDATE component_config SET component_key = ?, schema_version = ?, schema_json = ?, revision = revision + 1, updated_by = ?, updated_time = ? WHERE id = ? AND EXISTS (SELECT 1 FROM component_definition WHERE component_key = ? AND library_key = ? AND schema_version = ?)',
         [schema.componentKey, schema.schemaVersion, JSON.stringify(schema), userId, new Date(), configId,
           schema.componentKey, schema.libraryKey, schema.schemaVersion],
       )
@@ -100,11 +107,11 @@ export const componentConfigRepository: ComponentConfigRepository = {
     finally { connection.release() }
   },
   async list() {
-    const [rows] = await db.query<ConfigRow[]>(`SELECT ${columns} FROM component_config ORDER BY updated_time DESC, id ASC`)
+    const [rows] = await db.query<ConfigRow[]>(`SELECT ${columns} FROM component_config WHERE schema_version = 1 ORDER BY updated_time DESC, id ASC`)
     return rows.map(toConfig)
   },
   async find(configId) {
-    const [rows] = await db.execute<ConfigRow[]>(`SELECT ${columns} FROM component_config WHERE id = ?`, [configId])
+    const [rows] = await db.execute<ConfigRow[]>(`SELECT ${columns} FROM component_config WHERE id = ? AND schema_version = 1`, [configId])
     return rows[0] ? toConfig(rows[0]) : null
   },
 }

@@ -14,15 +14,16 @@ export interface AuthRepository {
     create(user: NewUser): Promise<UserRecord>
     listUsers(): Promise<AuthUser[]>
     setDisabled(userId: string, disabled: boolean): Promise<AuthUser | null>
+    updateNickname(userId: string, nickname: string): Promise<AuthUser | null>
     issueEmailToken(userId: string, purpose: EmailTokenPurpose, hash: Buffer, expires: Date): Promise<void>
     consumeEmailToken(hash: Buffer, purpose: EmailTokenPurpose, passwordHash?: string): Promise<boolean>
 }
 
 interface UserRow extends RowDataPacket {
-    userId: string; username: string; email: string | null; emailVerified: number
+    userId: string; username: string; nickname: string | null; email: string | null; emailVerified: number
     role: 'user' | 'admin'; disabled: number; createdTime: Date; passwordHash: string; authVersion: number
 }
-const columns = 'id AS userId, username, email, email_verified AS emailVerified, role, disabled, created_time AS createdTime, password_hash AS passwordHash, auth_version AS authVersion'
+const columns = 'id AS userId, username, nickname, email, email_verified AS emailVerified, role, disabled, created_time AS createdTime, password_hash AS passwordHash, auth_version AS authVersion'
 function toRecord(row: UserRow): UserRecord {
     return { ...row, emailVerified: Boolean(row.emailVerified), disabled: Boolean(row.disabled), createdTime: row.createdTime.toISOString() }
 }
@@ -52,6 +53,11 @@ export const authRepository: AuthRepository = {
         await db.execute("UPDATE app_user SET disabled = ?, auth_version = auth_version + 1 WHERE id = ? AND role = 'user'", [disabled, userId])
         const record = await find('id', userId)
         return record ? publicUser(record) : null
+    },
+    async updateNickname(userId, nickname) {
+        await db.execute('UPDATE app_user SET nickname = ? WHERE id = ? AND disabled = FALSE', [nickname, userId])
+        const record = await find('id', userId)
+        return record && !record.disabled ? publicUser(record) : null
     },
     async issueEmailToken(userId, purpose, hash, expires) {
         const connection = await db.getConnection()

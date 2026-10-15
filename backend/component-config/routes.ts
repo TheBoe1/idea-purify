@@ -26,13 +26,13 @@ export function createComponentConfigRouter(options: RouteOptions): Router {
     if (!isSaveComponentConfigRequest(input)) throw options.error(400, getSaveComponentConfigError(input) ?? '组件配置无效')
     return input.schema
   }
-  router.get('/component-definitions', options.authenticated, async (_req, res) => {
+  router.get('/component-definitions', options.authenticated, options.administrator, async (_req, res) => {
     res.json(await repository().listDefinitions())
   })
-  router.get('/component-configs', options.authenticated, async (_req, res) => {
+  router.get('/component-configs', options.authenticated, options.administrator, async (_req, res) => {
     res.json(await repository().list())
   })
-  router.get('/component-configs/:configId', options.authenticated, async (req, res) => {
+  router.get('/component-configs/:configId', options.authenticated, options.administrator, async (req, res) => {
     const saved = await repository().find(id(req))
     if (!saved) throw options.error(404, '组件配置不存在')
     res.json(saved)
