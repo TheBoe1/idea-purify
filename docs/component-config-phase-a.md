@@ -1,71 +1,111 @@
-# Phase A：业务组件与配置复用
+# 组件工作台架构：V1 兼容与 V2 页面发布
 
-本轮按桌面 `file.txt` 渐进实施配置式创建。目标是让管理员选择已注册的 Element Plus 能力、编辑配置、预览、保存到 MySQL，再由独立的「组件」页面读取和复用。首页继续承担记录 Idea 的业务入口。
+更新：2026-10-15。三组件的 Phase A 原型已扩展为 Element Plus 工作台；本文描述当前落盘实现。自动化、真实数据库和浏览器分别验收，不能以目录数量或预览成功代替完整用户链路。
 
-## 审计与范围
+## 业务与管理分工
 
-审计时 Home 的职责包括自动补全、表单状态、验证、提交和通知。API 请求已经集中在 `src/api`，共享 Idea 契约、Repository、会话与管理员权限已经存在，可以保留。归档、卡片、只读详情也不需要为了组件化而重新实现。
+首页、归档、想法卡片和详情保留原有业务。`IdeaEntryForm` 负责受控输入、提示词与表单反馈；`IdeaEntryPanel` 编排草稿、会话、验证、创建请求和结果。首页和已发布的业务节点复用 Panel，避免为每个 Element Plus 控件创建 Base 包装。
 
-| 决策 | 模块 | 本轮职责 |
+顶部用户名菜单提供个人资料、退出和管理员专属管理入口。管理区采用固定 `AdminLayout`，收拢用户管理、组件目录和方案工作台；普通用户不读取管理草稿。路由元数据集中维护菜单和角色，Node 仍逐请求检查真实会话，前端隐藏菜单不充当权限边界。
+
+| 页面 | 固定路由 | 使用人 |
 | --- | --- | --- |
-| 保留 | Idea API、归档、详情、账户体系 | 接口字段与个人数据隔离保持兼容 |
-| 重构 | Home 与 IdeaEntryForm | 表单负责输入、提示词、受控值与提交事件，页面负责草稿和 HTTP 提交 |
-| 新增 | 共享 Schema、组件元数据、前端 Registry | 描述配置规则，白名单映射到 Element Plus，验证后再渲染 |
-| 新增 | 管理配置页、组件展示页、Node 配置 API | 管理员写配置；登录用户加载复用；输入内容本身不被配置保存接口提交 |
-| 新增 | 定义表与实例表 | 分别保存系统能力描述和页面使用配置，版本标识明确 |
-| 重构 | 静态路由元数据与菜单生成 | 固定页面注册、菜单顺序、角色与激活项集中管理 |
-| 暂缓 | 拖拽、任意库、动态菜单、工作流 | Phase B/C 扩展方向，不在本轮实现 |
+| 个人资料 | `/profile` | 已登录用户，仅改本人昵称 |
+| 用户管理 | `/admin/users` | 管理员 |
+| 全库目录 | `/admin/catalog` | 管理员 |
+| 方案工作台 | `/admin/workbench` | 管理员 |
+| 已发布独立页 | `/pages/:pageKey` | 已登录用户 |
 
-现有单个较小的首页不需要十几个 `BaseXXX`。抽取 IdeaEntryForm 的价值是复用真实业务表单，而不是给每个 Element Plus 组件增加一层包装。
+旧 `/components`、`/admin/components` 仅重定向至管理区。没有数据库动态 import、任意路由模块或脚本执行入口。
 
-## 复用与边界
+## 从元数据到渲染
 
 ```mermaid
 flowchart TD
-  Home[Home 页面] --> Form[IdeaEntryForm]
-  Form --> Auto[Element Plus Autocomplete]
-  Home --> IdeaAPI[现有 Idea API]
-  Manage[管理员配置页] --> Preview[SchemaRenderer]
-  Reuse[组件展示页] --> Preview
-  Preview --> Registry[已注册组件映射]
-  Registry --> Element[Element Plus input / textarea / button]
-  Manage --> ConfigAPI[配置 API]
-  Reuse --> ConfigAPI
-  ConfigAPI --> Node[Node 验证和角色鉴权]
-  Node --> Definitions[MySQL 组件定义]
-  Node --> Instances[MySQL 组件实例]
+  Catalog[官方 2.14.5 目录及源码类型] --> Contract[shared/catalog 元数据]
+  Contract --> Editor[结构化 Props / Events / Slots 编辑]
+  Editor --> Guard[shared/contracts/workbench 校验]
+  Guard --> Preview[可信 Runtime 预览]
+  Guard --> API[Node 会话与管理员鉴权]
+  API --> Template[component_config 方案草稿]
+  API --> Scene[ui_page_config 页面关联及草稿]
+  Scene --> Publish[发布独立 JSON 快照]
+  Publish --> RuntimeAPI[已登录用户读取 published]
+  RuntimeAPI --> Page[独立页 / 既有白名单区域]
+  Page --> Preview
 ```
 
-组件定义描述系统提供什么能力，例如输入组件允许哪些属性。组件实例描述一次具体使用，例如名称、字段、占位文字与校验。相同定义可被多个实例复用；数据库没有 Vue 源码，也没有动态 import 路径。
+`shared/catalog/element-plus.ts` 由版本固定的官方文档、源码和安装类型生成并审计，覆盖官方 82 条目录。条目附用途、选型条件和限制；公开 API 分成组件、服务、指令、设计规范及内部对象/实例接口。目录条目数量不等于可独立渲染组件数量：Border/Color/Typography 使用设计规范适配，Layout 等组合条目选择其真实根组件，内部 Column/TabNav 等接口通过所属属性或公开 ref 路径使用。
 
-首轮支持 `input`、`textarea`、`button`；`libraryKey` 只接受 `element-plus`。Schema 固定版本，属性与字段逐项检查，未知属性、动态事件和脚本不可透传。按钮仅允许一个已注册的 `click / show-message` 动作；消息作为文本显示。不存在 eval、Function 或任意数据库字符串加载组件的入口。
+Node 不导入 Vue。静态元数据、真实运行时导出白名单及图标白名单决定允许的能力；数据库描述不能新增可执行实现。详情见 `element-plus-api-coverage.md`，其中元数据覆盖和实际行为验证分别记录。
 
-SchemaRenderer 对异常配置显示局部错误，其他已加载实例继续渲染。实例预览的值只存在浏览器组件状态中，不改变已保存配置或 Idea 正文。Idea 自动补全由专用业务组件保留，异步回调不序列化到数据库。
+## Schema 与实例状态
 
-本轮 Repository 采用整批验证：数据库中某个损坏实例会令列表读取返回安全 503，展示页显示加载错误；合法实例的单独详情仍可读取。这不会导致应用崩溃，但尚未实现逐条隔离损坏记录、部分返回正常列表的策略。
+`shared/contracts/component-config.ts` 保留 V1 input/textarea/button 契约。`shared/contracts/workbench.ts` 新增 V2，明确 `schemaVersion / libraryKey / libraryVersion`、节点、状态初值和注册资源。旧记录不在初始化时自动转换，V1 仍可读取；管理员显式从工作台保存 V2 时才迁移该实例。
 
-## 权限与路由
+V2 的属性使用类型化值：literal、数组/对象、Date、受限 RegExp、图标、已注册组件、VNode、callback、DOM/ref、HTML 和 style。Function 通过可信回调策略表达，事件通过注册动作表达，不保存可执行 JS。策略具有受控参数；resolve 回调显式配置成功/失败参数索引，避免把 reject 当 resolve。不同验证器与筛选器使用匹配真实 API 的结果模式。
 
-参考 RuoYi-Vue3 的静态与权限路由分离、路由元数据驱动菜单的思路，采用符合项目规模的固定路由列表。页面只能来自代码中明确注册的组件。没有从数据库任意路径加载模块，也没有引入完整动态菜单系统。
+`for` 的 item/index 和插槽公开参数形成词法作用域。绑定只能引用已声明状态、资源、合法作用域、范围内事件参数或公开本人身份；状态写入只允许 state/scope。方法引用必须属于目标组件的公开 Exposes；内部 ref 还检查所属父 API 和公开路径。必填属性、枚举、对象成员、别名重复、双向 update 事件、未知键和原型字段均被校验。
 
-路由角色和菜单可见性用于前端体验。Node 仍以真实会话检查身份和管理员角色；普通用户即使直接请求写入接口，也必须得到 403。配置属于管理员发布的共享 UI 配置，不等同于用户的私有 Idea 数据。
+`schema.state` 保存管理员设定的默认状态；浏览器输入和预览交互仅改变当前运行实例，不自动覆盖数据库配置。普通用户的 Idea 正文继续通过原业务 API，`current-user-ideas` 数据源始终使用当前登录会话，不接受任意 owner。上传适配提供受控预览；没有任意 URL 请求执行器。
 
-## 数据库与兼容性
+## 保存、发布与两类挂载
 
-新增定义和实例表，通过增量 SQL 创建；现有 Idea 行不修改，不重新分配归属。配置接口沿用 mysql2 和 Repository，使用参数化查询。前后端共享结构验证；后端验证才是写入的最终边界。
+| 表 | 职责 |
+| --- | --- |
+| `component_definition` | 已安装能力元数据；V1 与版本化 V2 注册项分开标识 |
+| `component_config` | 可复用方案；V1/V2 JSON、revision 和创建/更新身份时间 |
+| `ui_page_config` | 目标区域、页面草稿版本和独立发布名称/JSON/版本/时间 |
 
-这轮不增加删除 API；管理员可创建、更新实例，用户只读。旧的 `POST /idea`、`GET /ideas`、`GET /ideas/:ideaId` 保留 `ideaId / ideaContent / createdTime`。登录不恢复已移除的 Origin 校验。
+定义与实例是逻辑关联，未增加物理外键和 REFERENCES 权限。建表与增量初始化在 `backend/db/schema.sql`、`backend/db/setup.ts`。既有账号和 Idea 不清空、不重新分配。
 
-已有构建缺陷来自 session store 类型声明固定旧版 mysql2，与项目连接池类型冲突。本轮只在适配层通过第三方构造参数类型表达兼容连接；不升级依赖，不改用户正在维护的 pnpm 配置。
+模板保存不会自动发布。页面关联复制方案为独立草稿，更新须携带 `expectedRevision`；事务行锁检查并递增版本，过期保存/发布返回 409。旧版编辑器也递增相同版本，避免跨编辑器覆盖。发布复制当前名称与 Schema 到独立快照，后续模板或页面草稿修改不改变用户正在读取的版本。
 
-## 验收方法
+独立页使用代码固定的 `/pages/:pageKey`。既有区域只接受下列注册目标：
 
-自动化测试验证公开行为：Idea 表单受控输入、自动补全、校验、防双击、HTTP 成功及失败；Schema 危险属性、版本、字段边界；Registry 局部降级和文本转义；管理员权限、错误响应；配置保存与重新加载；菜单角色和页面白名单。
+| pageKey | regionKey |
+| --- | --- |
+| home | after-entry |
+| archive | before-list / after-list |
+| ideas | before-grid / after-grid |
+| idea-detail | after-detail |
 
-真实 MySQL smoke 单独执行，只创建随机名称的临时用户和配置，记录精确 ID 后清理。邮件使用进程内替身，不发送外部邮件。现有 Idea 内容与归属在运行前后保持一致。浏览器再手动检查配置创建→预览→保存→展示→刷新，以及 Idea 核心流程；截图由主代理保存。
+目标创建后不可通过更新接口改写；同一目标只有一份页面关联。首页本身已有录入面板，扩展区拒绝从 root、状态、资源或回调间接重复嵌入业务录入节点，普通 literal JSON 不会误判成节点。
 
-详见 `testing-component-config.md`。未执行的检查只写待验收，不标记成功。
+## API
 
-## 后续扩展
+下表为 Node 路径；浏览器通过同源 `/api` 前缀代理访问。
 
-Phase B 可以复用注册表和实例 Schema 加入拖拽布局；新增组件必须同时增加元数据、允许的属性、运行时验证与渲染映射。真正引入数据库菜单时，再增加菜单契约和固定页面注册映射，不把路径直接当模块地址执行。
+| 权限 | 请求 | 行为 |
+| --- | --- | --- |
+| 管理员 | GET `/admin/catalog` | 完整已安装可信目录 |
+| 管理员 | GET / POST `/admin/templates` | 列表 / 创建 `{schema}` |
+| 管理员 | GET / PUT `/admin/templates/:id` | 详情 / 更新 `{schema, expectedRevision}` |
+| 管理员 | GET / POST `/admin/page-configs` | 列表 / 创建 `{name, target, schema}` |
+| 管理员 | GET / PUT `/admin/page-configs/:id` | 详情 / 更新 `{name, schema, expectedRevision}` |
+| 管理员 | POST `/admin/page-configs/:id/publish` | 发布 `{expectedRevision}` |
+| 已登录 | GET `/ui/pages/:pageKey` | 独立页已发布快照 |
+| 已登录 | GET `/ui/regions/:pageKey/:regionKey` | 白名单区域已发布快照 |
+| 已登录 | PATCH `/auth/profile` | `{nickname}`，只修改本人昵称 |
+
+旧 `GET /component-definitions`、`GET /component-configs`、详情及旧写接口均改为管理员权限。此为用户确认的新管理范围；普通用户通过 published runtime 读取发布内容。没有删除接口。
+
+创建 201、更新/发布 200、非法输入 400、匿名/失效会话 401、角色不足 403、不存在或未发布 404、版本或目标冲突 409、请求过大 413、数据库故障/损坏存储 503。runtime 响应只有发布字段，不含草稿版本和内容。
+
+## 安全与兼容边界
+
+所有写入使用参数化 SQL，归属和审计人来自真实会话。昵称以 Unicode 字符计数，trim 后 1–40 字符，禁止控制/隐藏字符；不修改登录 username、角色、密码或 userId。Idea 接口字段与个人隔离保持原契约。
+
+方案 JSON 上限为 UTF-8 128 KiB；管理配置 HTTP 上限 256 KiB，Idea/认证保持 16 KiB。另限制节点、层级、资源及类型化值数量，共享预算不能通过嵌套作用域重置。
+
+URL、样式、HTML/SVG、正则和 DOM 引用使用受控边界。HTML 仅安全排版子集，Loading SVG 仅几何标签/静态属性；浏览器再用 DOMPurify。动态绑定与回调结果在使用点重新校验，不能仅验证初始静态 JSON。未知/危险配置拒绝保存或局部显示错误；列表读仍采用整批存储校验，尚不支持损坏列表部分返回。
+
+Cookie 会话由 Passport/express-session 及 MySQL 管理。TTL 到期、禁用或 auth_version 变化会销毁旧会话并返回 401；旧响应不清除或重发旧 SID，避免晚到后覆盖刚建立的新登录。携带失效 Cookie 可以直接重新登录，失败凭据不产生匿名 SID；显式退出继续清 Cookie。前端会话代次另行阻止旧 HTTP 结果写入新账号状态。
+
+非预期错误只记录安全结构化诊断：固定路由模板、允许的 method、错误代码白名单和固定错误类型，不记录 SQL、参数、密码、动态 URL、请求体或 error message/stack。
+
+## 启动与验证
+
+按 README 配置本机 `.env.local`、专用 MySQL 账号与随机 SESSION_SECRET，执行 `npm ci`、`npm run db:init`、`npm run dev`。迁移需要项目库 SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER，日常运行无需使用 root。配置文件不提交，SMTP 未配置不算真实邮箱验收通过。
+
+完整步骤和本次已执行证据见 `testing-component-config.md`。拖拽、任意组件库和数据库动态菜单不在本次实现范围；元数据/契约通过不能替代所有高级 API 的真实交互验收。
