@@ -25,3 +25,4 @@ export async function loadUsers(): Promise<AuthUser[]> {
     return data
 }
 export const setUserDisabled = async (userId: string, disabled: boolean) => readUser(await requestJson(`/admin/users/${encodeURIComponent(userId)}/status`, { method: 'PATCH', body: JSON.stringify({ disabled }) }))
+export const updateProfile = async (nickname: string) => readUser(await requestJson('/auth/profile', { method: 'PATCH', body: JSON.stringify({ nickname }) }))

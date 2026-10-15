@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { loadIdea } from '@/api/ideas'
 import type { Idea } from '@/types/idea'
+import PageRegion from '@/components/workbench/PageRegion.vue'
 
 const route = useRoute()
 const idea = ref<Idea | null>(null)
@@ -37,6 +38,7 @@ watch(() => route.params.ideaId, refresh, { immediate: true })
                 <p class="idea-content">{{ idea.ideaContent }}</p>
             </el-card>
         </div>
+        <PageRegion page-key="idea-detail" region-key="after-detail" />
     </section>
 </template>
 

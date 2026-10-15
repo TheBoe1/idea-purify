@@ -9,32 +9,51 @@ import { clearIdeaDraft, ideaDraft } from '../stores/ideaDraft'
 import type { Idea } from '../../shared/contracts/idea.ts'
 
 const wrappers: ReturnType<typeof mount>[] = []
-const savedIdea: Idea = { ideaId: '31', ideaContent: '用户想法', createdTime: '2026-10-13T08:00:00Z' }
+const savedIdea: Idea = {
+  ideaId: '31',
+  ideaContent: '用户想法',
+  createdTime: '2026-10-13T08:00:00Z',
+}
 
-vi.mock('element-plus', async importOriginal => {
+vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
-  return { ...actual, ElNotification: vi.fn() }
+  return { ...actual, ElNotification: vi.fn<typeof actual.ElNotification>() }
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
   clearIdeaDraft()
-  Object.assign(authState, { user: { userId: 'form-user', username: 'form_user', role: 'user' }, ready: true })
+  Object.assign(authState, {
+    user: { userId: 'form-user', username: 'form_user', role: 'user' },
+    ready: true,
+  })
 })
 afterEach(() => {
-  wrappers.splice(0).forEach(wrapper => wrapper.unmount())
+  wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
   vi.unstubAllGlobals()
   clearIdeaDraft()
 })
 async function renderForm(modelValue = '') {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/archive', component: { template: '<p>归档</p>' } }] })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/archive', component: { template: '<p>归档</p>' } }],
+  })
   await router.push('/archive')
-  const wrapper = mount(IdeaEntryForm, { props: { modelValue, submitting: false, inputId: 'idea-input' }, global: { plugins: [ElementPlus, router] } })
+  const wrapper = mount(IdeaEntryForm, {
+    props: { modelValue, submitting: false, inputId: 'idea-input' },
+    global: { plugins: [ElementPlus, router] },
+  })
   wrappers.push(wrapper)
   return wrapper
 }
 async function renderHome() {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: HomeView }, { path: '/archive', component: { template: '<p>归档</p>' } }] })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', component: HomeView },
+      { path: '/archive', component: { template: '<p>归档</p>' } },
+    ],
+  })
   await router.push('/')
   await router.isReady()
   const wrapper = mount(HomeView, { global: { plugins: [ElementPlus, router] } })
@@ -43,7 +62,7 @@ async function renderHome() {
   return wrapper
 }
 function submitButton(wrapper: ReturnType<typeof mount>) {
-  return wrapper.findAll('button').find(button => button.text() === '提交')!
+  return wrapper.findAll('button').find((button) => button.text() === '提交')!
 }
 
 describe('Idea 录入组件的公开接口', () => {
@@ -57,7 +76,7 @@ describe('Idea 录入组件的公开接口', () => {
     expect(wrapper.emitted('submit')).toEqual([['一个新想法']])
   })
 
-  it.each([' ', '字', '字'.repeat(256)])('非法内容不会发出提交事件：%s', async content => {
+  it.each([' ', '字', '字'.repeat(256)])('非法内容不会发出提交事件：%s', async (content) => {
     const wrapper = await renderForm(content)
     await submitButton(wrapper).trigger('click')
     expect(wrapper.emitted('submit')).toBeUndefined()
@@ -77,7 +96,7 @@ describe('Idea 录入组件的公开接口', () => {
     await wrapper.get('#idea-input').trigger('focus')
     await wrapper.get('#idea-input').setValue('我今天')
     await wrapper.setProps({ modelValue: '我今天' })
-    await new Promise(resolve => setTimeout(resolve, 350))
+    await new Promise((resolve) => setTimeout(resolve, 350))
     await flushPromises()
     expect(document.body.textContent).toContain('我今天看到了什么')
     expect(document.body.textContent).toContain('我今天想要做')
@@ -95,15 +114,21 @@ describe('Idea 录入组件的公开接口', () => {
 describe('Home 页面提交编排', () => {
   it('只发一次创建请求，等待期间锁定表单，成功后清空草稿', async () => {
     let complete!: (response: Response) => void
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => new Promise(resolve => { complete = resolve }))
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
+      String(input).startsWith('/api/ui/regions/')
+        ? Promise.resolve(Response.json({ message: '尚未发布' }, { status: 404 }))
+        : new Promise((resolve) => {
+            complete = resolve
+          }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await renderHome()
     await wrapper.get('#idea-input').setValue('  用户想法  ')
     await submitButton(wrapper).trigger('click')
     await submitButton(wrapper).trigger('click')
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/idea')
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ ideaContent: '用户想法' }))
+    const writes = fetchMock.mock.calls.filter((call) => call[0] === '/api/idea')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.[1]?.body).toBe(JSON.stringify({ ideaContent: '用户想法' }))
     expect((wrapper.get('#idea-input').element as HTMLInputElement).disabled).toBe(true)
     complete(Response.json(savedIdea, { status: 201 }))
     await flushPromises()
@@ -113,24 +138,41 @@ describe('Home 页面提交编排', () => {
   })
 
   it('HTTP 失败保留输入并恢复操作，不显示保存成功', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json({ message: '暂时无法保存想法' }, { status: 503 })))
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ message: '暂时无法保存想法' }, { status: 503 })),
+    )
     const wrapper = await renderHome()
     await wrapper.get('#idea-input').setValue('失败后需要保留的内容')
     await submitButton(wrapper).trigger('click')
     await flushPromises()
     expect(ideaDraft.ideaContent).toBe('失败后需要保留的内容')
-    expect((wrapper.get('#idea-input').element as HTMLInputElement).value).toBe('失败后需要保留的内容')
+    expect((wrapper.get('#idea-input').element as HTMLInputElement).value).toBe(
+      '失败后需要保留的内容',
+    )
     expect((wrapper.get('#idea-input').element as HTMLInputElement).disabled).toBe(false)
     expect(wrapper.text()).not.toContain('想法已保存')
   })
 
   it('上一账号的延迟创建结果不能清除新账号草稿或显示旧成功反馈', async () => {
     let complete!: (response: Response) => void
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise(resolve => { complete = resolve })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          }),
+      ),
+    )
     const wrapper = await renderHome()
     await wrapper.get('#idea-input').setValue('上一账号提交的想法')
     await submitButton(wrapper).trigger('click')
-    Object.assign(authState, { user: { userId: 'second-user', username: 'second_user', role: 'user' } })
+    Object.assign(authState, {
+      user: { userId: 'second-user', username: 'second_user', role: 'user' },
+    })
     ideaDraft.ownerId = 'second-user'
     ideaDraft.ideaContent = '新账号尚未提交的想法'
     complete(Response.json(savedIdea, { status: 201 }))
@@ -143,7 +185,15 @@ describe('Home 页面提交编排', () => {
 
   it('同一账号提交后产生的新草稿也不被旧请求成功结果清空', async () => {
     let complete!: (response: Response) => void
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise(resolve => { complete = resolve })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          }),
+      ),
+    )
     const wrapper = await renderHome()
     await wrapper.get('#idea-input').setValue('原先提交的想法')
     await submitButton(wrapper).trigger('click')
