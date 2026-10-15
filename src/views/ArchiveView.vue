@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { loadIdeas } from '@/api/ideas'
 import type { Idea } from '@/types/idea'
+import PageRegion from '@/components/workbench/PageRegion.vue'
 
 const activities = ref<Idea[]>([])
 const loading = ref(false)
@@ -34,6 +35,7 @@ onMounted(refresh)
             <el-button :loading="loading" @click="refresh">刷新</el-button>
         </div>
         <el-alert v-if="errorMessage" title="加载失败" :description="errorMessage" type="error" show-icon :closable="false" />
+        <PageRegion page-key="archive" region-key="before-list" />
         <div v-loading="loading" class="archive-list" aria-live="polite" :aria-busy="loading">
             <el-empty v-if="!loading && !errorMessage && !activities.length" description="还没有想法，去首页记录第一条吧" />
             <el-timeline v-if="activities.length">
@@ -47,6 +49,7 @@ onMounted(refresh)
                 </el-timeline-item>
             </el-timeline>
         </div>
+        <PageRegion page-key="archive" region-key="after-list" />
     </section>
 </template>
 

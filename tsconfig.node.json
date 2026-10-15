@@ -4,6 +4,7 @@
   "include": [
     "backend/**/*.ts",
     "shared/**/*.ts",
+    "scripts/**/*.ts",
     "vite.config.*",
     "vitest.config.*",
     "cypress.config.*",

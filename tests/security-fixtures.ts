@@ -34,6 +34,12 @@ export function createSecurityRepositories() {
       if (user.role === 'user') { user.disabled = disabled; user.authVersion++ }
       return publicUser(user)
     },
+    async updateNickname(id, nickname) {
+      const user = users.get(id)
+      if (!user || user.disabled) return null
+      user.nickname = nickname
+      return publicUser(user)
+    },
     async issueEmailToken(userId, purpose, hash, expires) {
       for (const [key, token] of tokens) if (token.userId === userId && token.purpose === purpose) tokens.delete(key)
       tokens.set(hash.toString('hex'), { userId, purpose, expires, used: false })

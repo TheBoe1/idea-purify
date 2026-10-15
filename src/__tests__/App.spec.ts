@@ -39,6 +39,7 @@ async function renderApp(path = '/') {
       { path: '/', component: HomeView },
       { path: '/ideas', component: IdeasView },
       { path: '/archive', component: ArchiveView },
+      { path: '/components', component: { template: '<p>组件展示</p>' } },
       { path: '/ideas/:ideaId', name: 'idea-detail', component: { template: '<p>详情</p>' } },
     ],
   })

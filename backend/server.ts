@@ -5,10 +5,12 @@ import { ideaRepository } from './db/ideas.ts'
 import { authRepository } from './db/auth.ts'
 import { createSessionStore } from './auth/session-store.ts'
 import { createMailer } from './auth/mail.ts'
+import { componentConfigRepository } from './db/component-configs.ts'
+import { workbenchRepository } from './db/workbench.ts'
 
 const config = getAuthConfiguration()
 const sessionStore = createSessionStore(config.sessionTtlMs)
-const server = createIdeaServer(ideaRepository, { ...config, authRepository, sessionStore,
+const server = createIdeaServer(ideaRepository, { ...config, authRepository, sessionStore, componentConfigRepository, workbenchRepository,
     mailer: createMailer(getSmtpConfiguration()) })
 server.on('error', () => {
     console.error(`后端启动失败，请检查 ${serverPort} 端口是否被占用`)

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { loadIdeas } from '@/api/ideas'
 import type { Idea } from '@/types/idea'
+import PageRegion from '@/components/workbench/PageRegion.vue'
 
 const ideas = ref<Idea[]>([])
 const loading = ref(false)
@@ -22,6 +23,7 @@ onMounted(refresh)
     <section class="ideas-area">
         <div class="page-header"><h1>我的想法</h1><el-button :loading="loading" @click="refresh">刷新</el-button></div>
         <el-alert v-if="errorMessage" title="加载失败" :description="errorMessage" type="error" show-icon :closable="false" />
+        <PageRegion page-key="ideas" region-key="before-grid" />
         <div v-loading="loading" class="cards-area" :aria-busy="loading" aria-live="polite">
             <el-empty v-if="!loading && !errorMessage && !ideas.length" description="还没有想法，去首页记录第一条吧" />
             <div v-if="ideas.length" class="ideas-grid">
@@ -33,6 +35,7 @@ onMounted(refresh)
                 </RouterLink>
             </div>
         </div>
+        <PageRegion page-key="ideas" region-key="after-grid" />
     </section>
 </template>
 
