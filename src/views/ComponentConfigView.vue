@@ -1,9 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, provide, ref, shallowRef, watch, type Ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElNotification } from 'element-plus'
+import {
+  computed,
+  onMounted,
+  nextTick,
+  onBeforeUnmount,
+  provide,
+  ref,
+  shallowRef,
+  watch,
+  type Ref,
+} from 'vue'
+import { useRoute, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { ElNotification, ElMessageBox } from 'element-plus'
 import { authState } from '@/stores/auth'
-import { getSessionGeneration } from '@/api/http'
+import { ApiError, getSessionGeneration } from '@/api/http'
 import {
   loadTemplates,
   loadTemplate,
@@ -33,6 +43,15 @@ import TypedValueEditor from '@/components/workbench/TypedValueEditor.vue'
 import WorkbenchRenderer from '@/components/workbench/WorkbenchRenderer.vue'
 import LegacyConfigEditor from '@/components/workbench/LegacyConfigEditor.vue'
 import { declareStateKey, makeApiNode } from '@/components/workbench/editor-model'
+import ComponentsView from './ComponentsView.vue'
+import WorkbenchManager from '@/components/workbench/WorkbenchManager.vue'
+import {
+  registerWorkbenchLeaveGuard,
+  saveWorkbenchRecovery,
+  takeWorkbenchRecovery,
+  clearWorkbenchRecovery,
+} from '@/stores/workbenchRecovery'
+import { simpleForm } from '@/components/workbench/starter'
 const route = useRoute()
 const isAdmin = computed(() => authState.user?.role === 'admin')
 const tab = ref('workbench')
@@ -63,6 +82,178 @@ const target = computed<PageTarget>(() =>
     : { kind: 'existing', pageKey: existingKey.value, regionKey: region.value },
 )
 const validation = computed(() => getRuntimeSchemaError(editingSchema.value))
+const managerOpen = ref(false)
+const catalogOpen = ref(false)
+const publishOpen = ref<string[]>([])
+const publicationSection = ref<{ $el: HTMLElement }>()
+async function showPublication() {
+  publishOpen.value = ['publish']
+  await nextTick()
+  publicationSection.value?.$el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+const saveStatus = ref<'idle' | 'saving' | 'saved' | 'failed'>('idle')
+const publishStatus = ref<'idle' | 'publishing' | 'failed'>('idle')
+const conflict = ref(false)
+const baselineSchema = ref(JSON.stringify(editingSchema.value))
+const pageFingerprint = computed(() =>
+  JSON.stringify({ name: pageName.value, target: target.value }),
+)
+const baselinePage = ref(pageFingerprint.value)
+const schemaDirty = computed(() => JSON.stringify(editingSchema.value) !== baselineSchema.value)
+const pageDirty = computed(() => pageFingerprint.value !== baselinePage.value)
+const legacyDirty = ref(false)
+const legacySaving = ref(false)
+const recovered = ref(false)
+const recoveryOwner = authState.user?.userId ?? ''
+let discardRecovery = false
+const dirty = computed(() => schemaDirty.value || pageDirty.value || legacyDirty.value)
+const stateLabel = computed(() =>
+  busy.value && saveStatus.value === 'saving'
+    ? '正在保存'
+    : saveStatus.value === 'failed'
+      ? '保存失败，修改仍保留'
+      : dirty.value
+        ? '存在未保存修改'
+        : saveStatus.value === 'saved'
+          ? '保存成功'
+          : '未修改',
+)
+const pageHasUnsavedChanges = computed(() =>
+  Boolean(
+    currentPage.value &&
+    (JSON.stringify(editingSchema.value) !== JSON.stringify(currentPage.value.schema) ||
+      pageName.value.trim() !== currentPage.value.name),
+  ),
+)
+const publicationLabel = computed(() =>
+  publishStatus.value === 'publishing'
+    ? '正在发布'
+    : publishStatus.value === 'failed'
+      ? '发布失败，可重试'
+      : !currentPage.value?.publishedRevision
+        ? '尚未发布'
+        : currentPage.value.status === 'changed' || pageHasUnsavedChanges.value
+          ? '已发布 · 有待发布修改'
+          : `已发布 r${currentPage.value.publishedRevision}`,
+)
+function markBaseline() {
+  recovered.value = false
+  baselineSchema.value = JSON.stringify(editingSchema.value)
+  baselinePage.value = pageFingerprint.value
+  saveStatus.value = 'idle'
+  publishStatus.value = 'idle'
+  conflict.value = false
+}
+async function mayReplace() {
+  if (busy.value || legacySaving.value) return false
+  if (!dirty.value) return true
+  try {
+    await ElMessageBox.confirm('当前修改尚未保存。离开后将丢失这些修改。', '保留当前编辑？', {
+      confirmButtonText: '放弃修改并继续',
+      cancelButtonText: '继续编辑',
+      type: 'warning',
+      closeOnClickModal: false,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+async function mayLeave() {
+  const allowed = await mayReplace()
+  if (allowed) discardRecovery = true
+  return allowed
+}
+onBeforeRouteLeave(mayLeave)
+const unregisterLeave = registerWorkbenchLeaveGuard(recoveryOwner, mayReplace)
+onBeforeRouteUpdate(
+  async (to, from) => to.query.apiKey === from.query.apiKey || (await mayReplace()),
+)
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value && !busy.value && !legacySaving.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => {
+  unregisterLeave()
+  window.removeEventListener('beforeunload', beforeUnload)
+  clearTimeout(previewTimer)
+  if (dirty.value && !discardRecovery && isAdmin.value !== false)
+    saveWorkbenchRecovery(recoveryOwner, recoverySnapshot())
+  else if (dirty.value && !discardRecovery && !authState.user)
+    saveWorkbenchRecovery(recoveryOwner, recoverySnapshot())
+  else clearWorkbenchRecovery(recoveryOwner)
+})
+function recoverySnapshot() {
+  return copy({
+    tab: tab.value,
+    document: document.value,
+    legacySchema: legacySchema.value,
+    currentTemplate: currentTemplate.value,
+    currentPage: currentPage.value,
+    pageName: pageName.value,
+    target: target.value,
+    baselineSchema: baselineSchema.value,
+    baselinePage: baselinePage.value,
+  })
+}
+function restoreRecovery() {
+  const saved = takeWorkbenchRecovery<ReturnType<typeof recoverySnapshot>>(recoveryOwner)
+  if (!saved) return false
+  tab.value = saved.tab
+  document.value = saved.document
+  legacySchema.value = saved.legacySchema
+  currentTemplate.value = saved.currentTemplate
+  currentPage.value = saved.currentPage
+  pageName.value = saved.pageName
+  targetKind.value = saved.target.kind
+  if (saved.target.kind === 'dynamic') dynamicKey.value = saved.target.pageKey
+  else {
+    existingKey.value = saved.target.pageKey
+    region.value = saved.target.regionKey
+  }
+  baselineSchema.value = saved.baselineSchema
+  baselinePage.value = saved.baselinePage
+  recovered.value = true
+  return true
+}
+async function beforeTabLeave() {
+  return !legacySaving.value && (!legacyDirty.value || (await mayReplace()))
+}
+
+let previewTimer: ReturnType<typeof setTimeout>
+watch(
+  editingSchema,
+  () => {
+    feedback.value = ''
+    clearTimeout(previewTimer)
+    previewTimer = setTimeout(() => {
+      if (validation.value) return
+      preview.value = copy(editingSchema.value)
+      previewRevision.value++
+    }, 250)
+  },
+  { deep: true, immediate: true },
+)
+watch(pageFingerprint, () => {
+  feedback.value = ''
+})
+function addComponent(key: string) {
+  if (busy.value || legacySchema.value) return
+  try {
+    document.value.root.push(makeApiNode(key, updateState))
+    catalogOpen.value = false
+  } catch (failure) {
+    error.value = failure instanceof Error ? failure.message : '添加失败'
+  }
+}
+async function startForm() {
+  if (!(await mayReplace())) return
+  resetDocument()
+  document.value = simpleForm()
+}
+
 const publishedLink = computed(() =>
   !currentPage.value
     ? undefined
@@ -82,7 +273,9 @@ watch(
 function copy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
-function newDocument() {
+function resetDocument() {
+  tab.value = 'workbench'
+  legacyDirty.value = false
   document.value = createDefaultSchemaV2()
   currentTemplate.value = undefined
   currentPage.value = undefined
@@ -90,10 +283,19 @@ function newDocument() {
   preview.value = undefined
   error.value = ''
   feedback.value = ''
+  pageName.value = '新页面'
+  targetKind.value = 'dynamic'
+  dynamicKey.value = 'new-page'
+  markBaseline()
 }
-function newPageBinding() {
+async function newDocument() {
+  if (await mayReplace()) resetDocument()
+}
+async function newPageBinding() {
+  if (!(await mayReplace()) || busy.value) return
   currentPage.value = undefined
-  pageName.value = `${document.value.name}页面`
+  pageName.value = `${editingSchema.value.name}页面`
+  publishOpen.value = ['publish']
   error.value = ''
   feedback.value = ''
 }
@@ -103,6 +305,10 @@ function addState() {
     ['constructor', 'prototype', '__proto__'].includes(stateName.value)
   ) {
     error.value = '状态名称需使用安全标识符'
+    return
+  }
+  if (Object.hasOwn(document.value.state, stateName.value)) {
+    error.value = '状态名称已存在，请更换名称，原值已保留'
     return
   }
   document.value.state[stateName.value] = { kind: 'literal', value: '' }
@@ -172,7 +378,7 @@ function edit(saved: WorkbenchTemplate | PageConfig) {
   previewRevision.value++
 }
 async function openTemplate(id: string) {
-  if (busy.value) return
+  if (!(await mayReplace()) || busy.value) return
   busy.value = true
   const generation = getSessionGeneration()
   try {
@@ -181,6 +387,8 @@ async function openTemplate(id: string) {
     currentTemplate.value = saved
     currentPage.value = undefined
     edit(saved)
+    markBaseline()
+    managerOpen.value = false
   } catch (failure) {
     if (generation === getSessionGeneration())
       error.value = failure instanceof Error ? failure.message : '加载方案失败'
@@ -189,7 +397,7 @@ async function openTemplate(id: string) {
   }
 }
 async function openPage(id: string) {
-  if (busy.value) return
+  if (!(await mayReplace()) || busy.value) return
   busy.value = true
   const generation = getSessionGeneration()
   try {
@@ -205,6 +413,8 @@ async function openPage(id: string) {
       region.value = saved.target.regionKey
     }
     edit(saved)
+    markBaseline()
+    managerOpen.value = false
   } catch (failure) {
     if (generation === getSessionGeneration())
       error.value = failure instanceof Error ? failure.message : '加载页面失败'
@@ -212,58 +422,89 @@ async function openPage(id: string) {
     busy.value = false
   }
 }
-async function save(kind: 'template' | 'page') {
+async function save(kind: 'template' | 'page', asCopy = false) {
   if (kind === 'template' && legacySchema.value) {
     error.value = 'V1方案请在兼容编辑器保存，或新建V2方案'
     return
   }
   if (busy.value || !validate()) return
   if (kind === 'page') {
-    const failure = getPageTargetError(target.value)
+    const failure =
+      !pageName.value.trim() || Array.from(pageName.value).length > 64
+        ? '页面配置名称需为1–64个字符'
+        : getPageTargetError(target.value)
     if (failure) {
       error.value = failure
       return
     }
   }
   busy.value = true
+  saveStatus.value = 'saving'
+  feedback.value = ''
+  error.value = ''
+  conflict.value = false
+  const submitted = copy(editingSchema.value)
+  const submittedPage = pageFingerprint.value
   const generation = getSessionGeneration()
   try {
     if (kind === 'template') {
-      const saved = await saveTemplate(copy(document.value), currentTemplate.value)
+      const saved = await saveTemplate(
+        submitted as SchemaV2,
+        asCopy ? undefined : currentTemplate.value,
+      )
       if (generation !== getSessionGeneration()) return
       currentTemplate.value = saved
+      if (asCopy) {
+        currentPage.value = undefined
+        baselinePage.value = submittedPage
+      }
       feedback.value = `方案已保存，版本 ${saved.revision}`
     } else {
       const saved = await savePageConfig(
         pageName.value.trim(),
         target.value,
-        copy(editingSchema.value),
+        submitted,
         currentPage.value,
       )
       if (generation !== getSessionGeneration()) return
       currentPage.value = saved
       feedback.value = `页面草稿已保存，版本 ${saved.draftRevision}；发布后用户可见`
     }
+    if (kind === 'page' || !currentPage.value) baselineSchema.value = JSON.stringify(submitted)
+    if (kind === 'page') baselinePage.value = submittedPage
+    recovered.value = false
+    saveStatus.value = 'saved'
     await refresh()
   } catch (failure) {
-    if (generation === getSessionGeneration())
-      error.value = failure instanceof Error ? failure.message : '保存失败'
+    if (generation === getSessionGeneration()) {
+      error.value = failure instanceof Error ? failure.message : '保存失败，检查网络后重试'
+      saveStatus.value = 'failed'
+      conflict.value = failure instanceof ApiError && failure.status === 409
+    }
   } finally {
     busy.value = false
   }
 }
+async function saveCopy() {
+  await save('template', true)
+}
 async function publish() {
   if (busy.value || !currentPage.value) return
-  if (JSON.stringify(editingSchema.value) !== JSON.stringify(currentPage.value.schema)) {
+  if (pageHasUnsavedChanges.value) {
     error.value = '当前修改尚未保存，请先保存页面草稿'
     return
   }
   busy.value = true
+  publishStatus.value = 'publishing'
+  error.value = ''
+  feedback.value = ''
   const generation = getSessionGeneration()
   try {
     const saved = await publishPageConfig(currentPage.value)
     if (generation !== getSessionGeneration()) return
     currentPage.value = saved
+    publishStatus.value = 'idle'
+    conflict.value = false
     feedback.value = `页面已发布，版本 ${saved.publishedRevision}`
     ElNotification({
       title: '发布成功',
@@ -272,17 +513,27 @@ async function publish() {
     })
     await refresh()
   } catch (failure) {
-    if (generation === getSessionGeneration())
-      error.value = failure instanceof Error ? failure.message : '发布失败'
+    if (generation === getSessionGeneration()) {
+      error.value = failure instanceof Error ? failure.message : '发布失败，检查网络后重试'
+      publishStatus.value = 'failed'
+      conflict.value = failure instanceof ApiError && failure.status === 409
+    }
   } finally {
     busy.value = false
   }
 }
+watch(
+  () => route.query.apiKey,
+  (key, old) => {
+    if (key && key !== old && isAdmin.value) addComponent(String(key))
+  },
+)
 onMounted(() => {
   if (!isAdmin.value) return
+  const didRestore = restoreRecovery()
   void refresh()
   const key = String(route.query.apiKey ?? '')
-  if (key) {
+  if (key && !didRestore) {
     try {
       document.value.root.push(makeApiNode(key, updateState))
     } catch (failure) {
@@ -297,26 +548,81 @@ onMounted(() => {
       v-else
       ><div class="page-header">
         <h1>方案工作台</h1>
+        <div class="workflow-actions">
+          <el-button
+            type="primary"
+            :loading="saveStatus === 'saving'"
+            :disabled="busy || Boolean(legacySchema)"
+            @click="save(currentPage ? 'page' : 'template')"
+            >保存草稿</el-button
+          ><el-button :disabled="busy" @click="managerOpen = true">方案管理</el-button
+          ><el-button :disabled="busy || Boolean(legacySchema)" @click="catalogOpen = true"
+            >添加组件</el-button
+          ><el-button :disabled="busy" @click="showPublication">选择发布位置</el-button>
+        </div>
         <div>
           <el-button :loading="loading" :disabled="busy" @click="refresh">刷新列表</el-button
           ><el-button :disabled="busy" @click="newDocument">新建方案</el-button>
         </div>
       </div>
-      <p class="intro">
-        选择官方
-        API、配置属性与插槽、绑定安全策略，再保存方案或发布到项目页面。预览输入与本人业务数据不写入方案。
-      </p>
+      <el-alert
+        v-if="recovered"
+        title="已恢复本账号中断前的编辑，修改尚未保存到服务器"
+        type="warning"
+        :closable="true"
+        @close="recovered = false"
+      />
+      <div class="work-status" role="status" aria-live="polite">
+        <el-tag :type="saveStatus === 'failed' ? 'danger' : dirty ? 'warning' : 'info'">{{
+          stateLabel
+        }}</el-tag
+        ><el-tag>{{ publicationLabel }}</el-tag
+        ><span v-if="currentTemplate">组件方案 r{{ currentTemplate.revision }}</span
+        ><span v-if="currentPage">页面草稿 r{{ currentPage.draftRevision }}</span>
+      </div>
+      <div v-if="conflict" class="toolbar">
+        <el-button v-if="!currentPage && !currentTemplate" @click="managerOpen = true"
+          >查看已占用位置与已有草稿</el-button
+        ><el-button
+          v-if="currentPage || currentTemplate"
+          :disabled="busy"
+          @click="
+            currentPage
+              ? openPage(currentPage.pageConfigId)
+              : currentTemplate && openTemplate(currentTemplate.configId)
+          "
+          >重新加载最新版本</el-button
+        ><el-button :disabled="busy || Boolean(legacySchema)" @click="saveCopy"
+          >保留修改，另存为新方案</el-button
+        >
+      </div>
       <el-alert v-if="error" :title="error" type="error" :closable="false" role="alert" /><el-alert
         v-if="feedback"
         :title="feedback"
-        type="success"
+        :type="dirty ? 'info' : 'success'"
         :closable="false"
         role="status"
       />
-      <el-tabs v-model="tab"
-        ><el-tab-pane label="Schema 工作台" name="workbench"
+      <el-tabs v-model="tab" :before-leave="beforeTabLeave"
+        ><el-tab-pane label="可视化编辑" name="workbench"
           ><div class="editor-layout">
-            <div class="editor">
+            <div class="editor" :inert="busy">
+              <div v-if="!legacySchema && !document.root.length" class="quick-start">
+                <h2>从哪里开始？</h2>
+                <el-button type="primary" @click="startForm">从简单表单开始</el-button
+                ><el-button @click="catalogOpen = true">选择第一个组件</el-button
+                ><el-button
+                  text
+                  @click="
+                    document.root.push({
+                      kind: 'text',
+                      nodeId: 'text-' + Date.now(),
+                      value: { kind: 'literal', value: '内容' },
+                    })
+                  "
+                  >空白方案，直接编辑</el-button
+                >
+              </div>
               <el-form label-position="top" :disabled="busy"
                 ><el-form-item label="已保存方案"
                   ><el-select
@@ -333,10 +639,17 @@ onMounted(() => {
                   :disabled="!currentTemplate || busy"
                   @click="currentTemplate && openTemplate(currentTemplate.configId)"
                   >重新加载当前方案</el-button
-                ><el-form-item v-if="!legacySchema" label="方案名称"
+                ><el-form-item
+                  v-if="!legacySchema"
+                  label="方案名称"
+                  :error="
+                    Array.from(document.name).length > 64
+                      ? `方案名称最多64个字符，已输入${Array.from(document.name).length}个；内容未截断`
+                      : undefined
+                  "
                   ><el-input
                     v-model="document.name"
-                    maxlength="64"
+                    :class="{ 'is-invalid': Array.from(document.name).length > 64 }"
                     aria-label="方案名称" /></el-form-item
               ></el-form>
               <el-alert
@@ -422,102 +735,140 @@ onMounted(() => {
                 >
               </div>
               <p v-if="validation" class="validation" role="status">待修正：{{ validation }}</p>
-              <el-card class="publication"
-                ><template #header
-                  ><div class="page-header">
-                    <span>页面绑定与发布</span
-                    ><el-button :disabled="busy" @click="newPageBinding">新建页面绑定</el-button>
-                  </div></template
-                ><el-form label-position="top" :disabled="busy"
-                  ><el-form-item label="已有页面配置"
-                    ><el-select
-                      :model-value="currentPage?.pageConfigId"
-                      clearable
-                      aria-label="已有页面配置"
-                      @change="$event && openPage($event)"
-                      ><el-option
-                        v-for="page in pages"
-                        :key="page.pageConfigId"
-                        :value="page.pageConfigId"
-                        :label="`${page.name} · ${page.target.pageKey}/${page.target.regionKey} · ${page.status}`" /></el-select></el-form-item
-                  ><el-button
-                    :disabled="!currentPage || busy"
-                    @click="currentPage && openPage(currentPage.pageConfigId)"
-                    >重新加载页面配置</el-button
-                  ><el-form-item label="页面配置名称"
-                    ><el-input v-model="pageName" aria-label="页面配置名称" /></el-form-item
-                  ><el-form-item label="挂载方式"
-                    ><el-radio-group
-                      v-model="targetKind"
-                      :disabled="Boolean(currentPage)"
-                      aria-label="挂载方式"
-                      ><el-radio-button value="dynamic">独立配置页面</el-radio-button
-                      ><el-radio-button value="existing"
-                        >既有页面区域</el-radio-button
-                      ></el-radio-group
-                    ></el-form-item
-                  ><el-form-item v-if="targetKind === 'dynamic'" label="pageKey"
-                    ><el-input
-                      v-model="dynamicKey"
-                      :disabled="Boolean(currentPage)"
-                      aria-label="独立页面标识"
-                    /><span class="hint"
-                      >固定入口 /pages/{{ dynamicKey }}，不能配置 import 或路由源码。</span
-                    ></el-form-item
-                  ><template v-else
-                    ><el-form-item label="项目页面"
-                      ><el-select
-                        v-model="existingKey"
-                        :disabled="Boolean(currentPage)"
-                        aria-label="项目页面"
-                        ><el-option
-                          v-for="(_, key) in EXISTING_PAGE_REGIONS"
-                          :key="key"
-                          :value="key"
-                          :label="key" /></el-select></el-form-item
-                    ><el-form-item label="注册区域"
-                      ><el-select
-                        v-model="region"
-                        :disabled="Boolean(currentPage)"
-                        aria-label="注册区域"
-                        ><el-option
-                          v-for="key in EXISTING_PAGE_REGIONS[existingKey]"
-                          :key="key"
-                          :value="key"
-                          :label="key" /></el-select></el-form-item></template
-                ></el-form>
-                <div class="toolbar">
-                  <el-button :loading="busy" @click="save('page')">保存页面草稿</el-button
-                  ><el-button type="primary" :disabled="!currentPage || busy" @click="publish"
-                    >发布已保存版本</el-button
-                  >
-                </div>
-                <p v-if="currentPage" class="hint">
-                  草稿 r{{ currentPage.draftRevision }} · 发布
-                  {{ currentPage.publishedRevision ?? '尚未发布' }} · {{ currentPage.status }}
-                </p>
-                <RouterLink
-                  v-if="currentPage?.publishedRevision && publishedLink"
-                  :to="publishedLink"
-                  >打开已发布页面</RouterLink
-                ></el-card
+              <el-collapse ref="publicationSection" v-model="publishOpen"
+                ><el-collapse-item title="选择发布位置与页面草稿" name="publish"
+                  ><el-card class="publication"
+                    ><template #header
+                      ><div class="page-header">
+                        <span>页面绑定与发布</span
+                        ><el-button :disabled="busy" @click="newPageBinding"
+                          >新建页面绑定</el-button
+                        >
+                      </div></template
+                    ><el-form label-position="top" :disabled="busy"
+                      ><el-form-item label="已有页面配置"
+                        ><el-select
+                          :model-value="currentPage?.pageConfigId"
+                          clearable
+                          aria-label="已有页面配置"
+                          @change="$event && openPage($event)"
+                          ><el-option
+                            v-for="page in pages"
+                            :key="page.pageConfigId"
+                            :value="page.pageConfigId"
+                            :label="`${page.name} · ${page.target.pageKey}/${page.target.regionKey} · ${page.status}`" /></el-select></el-form-item
+                      ><el-button
+                        :disabled="!currentPage || busy"
+                        @click="currentPage && openPage(currentPage.pageConfigId)"
+                        >重新加载页面配置</el-button
+                      ><el-form-item
+                        label="页面配置名称"
+                        :error="
+                          Array.from(pageName).length > 64
+                            ? '页面配置名称最多64个字符，内容未截断'
+                            : undefined
+                        "
+                        ><el-input v-model="pageName" aria-label="页面配置名称" /></el-form-item
+                      ><el-form-item label="挂载方式"
+                        ><el-radio-group
+                          v-model="targetKind"
+                          :disabled="Boolean(currentPage)"
+                          aria-label="挂载方式"
+                          ><el-radio-button value="dynamic">独立配置页面</el-radio-button
+                          ><el-radio-button value="existing"
+                            >既有页面区域</el-radio-button
+                          ></el-radio-group
+                        ></el-form-item
+                      ><el-form-item
+                        v-if="targetKind === 'dynamic'"
+                        label="pageKey"
+                        :error="getPageTargetError(target)"
+                        ><el-input
+                          v-model="dynamicKey"
+                          :disabled="Boolean(currentPage)"
+                          aria-label="独立页面标识"
+                        /><span class="hint"
+                          >固定入口 /pages/{{ dynamicKey }}，不能配置 import 或路由源码。</span
+                        ></el-form-item
+                      ><template v-else
+                        ><el-form-item label="项目页面"
+                          ><el-select
+                            v-model="existingKey"
+                            :disabled="Boolean(currentPage)"
+                            aria-label="项目页面"
+                            ><el-option
+                              v-for="(_, key) in EXISTING_PAGE_REGIONS"
+                              :key="key"
+                              :value="key"
+                              :label="key" /></el-select></el-form-item
+                        ><el-form-item label="注册区域"
+                          ><el-select
+                            v-model="region"
+                            :disabled="Boolean(currentPage)"
+                            aria-label="注册区域"
+                            ><el-option
+                              v-for="key in EXISTING_PAGE_REGIONS[existingKey]"
+                              :key="key"
+                              :value="key"
+                              :label="key" /></el-select></el-form-item></template
+                    ></el-form>
+                    <div class="toolbar">
+                      <el-button :loading="busy" @click="save('page')">保存页面草稿</el-button
+                      ><el-button type="primary" :disabled="!currentPage || busy" @click="publish"
+                        >发布已保存版本</el-button
+                      >
+                    </div>
+                    <p v-if="currentPage" class="hint">
+                      草稿 r{{ currentPage.draftRevision }} · 发布
+                      {{ currentPage.publishedRevision ?? '尚未发布' }} · {{ currentPage.status }}
+                    </p>
+                    <RouterLink
+                      v-if="currentPage?.publishedRevision && publishedLink"
+                      :to="publishedLink"
+                      >打开已发布页面</RouterLink
+                    ></el-card
+                  ></el-collapse-item
+                ></el-collapse
               >
             </div>
             <aside class="preview">
               <el-card
-                ><template #header>运行预览</template
+                ><template #header
+                  >实时预览
+                  <el-tag v-if="validation" type="warning"
+                    >待修正，保留上次有效预览</el-tag
+                  ></template
                 ><WorkbenchRenderer
                   v-if="preview"
                   :schema="preview"
                   mode="preview"
                   :runtime-key="String(previewRevision)" /><el-empty
                   v-else
-                  description="点击校验并预览"
+                  description="添加组件后自动预览"
               /></el-card>
             </aside></div></el-tab-pane
         ><el-tab-pane label="V1 兼容配置" name="legacy"
-          ><LegacyConfigEditor v-if="tab === 'legacy'" /></el-tab-pane
+          ><LegacyConfigEditor
+            v-if="tab === 'legacy'"
+            navigation-managed
+            @dirty-change="legacyDirty = $event"
+            @saving-change="legacySaving = $event" /></el-tab-pane
       ></el-tabs>
+      <el-drawer
+        v-model="catalogOpen"
+        title="添加组件到当前方案"
+        size="min(900px, 100vw)"
+        :destroy-on-close="true"
+        ><ComponentsView embedded @select="addComponent"
+      /></el-drawer>
+      <el-drawer v-model="managerOpen" title="方案管理" size="min(760px, 100vw)"
+        ><WorkbenchManager
+          :templates="templates"
+          :pages="pages"
+          :busy="busy"
+          @template="openTemplate"
+          @page="openPage"
+      /></el-drawer>
     </template>
   </section>
 </template>
@@ -550,7 +901,7 @@ onMounted(() => {
 }
 .editor-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 24px;
 }
 .editor {
@@ -582,7 +933,7 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 .inline {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 @media (max-width: 1000px) {
   .editor-layout {
@@ -590,6 +941,55 @@ onMounted(() => {
   }
   .preview {
     position: static;
+  }
+}
+.work-status,
+.workflow-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 12px 0;
+}
+.quick-start {
+  padding: 16px;
+  border: 1px dashed #a0cfff;
+  border-radius: 8px;
+  background: #f0f7ff;
+}
+.quick-start h2 {
+  font-size: 16px;
+}
+.workbench-page,
+.value-entry,
+.publication {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.editor :deep(.el-form-item__content) {
+  min-width: 0;
+}
+.editor :deep(.el-input),
+.editor :deep(.el-select) {
+  min-width: 0;
+  max-width: 100%;
+}
+.preview :deep(.el-card__body) {
+  min-width: 0;
+  overflow: auto;
+  max-height: 75vh;
+}
+@media (max-width: 600px) {
+  .editor-layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .preview {
+    order: -1;
+  }
+  .inline > :deep(.el-input) {
+    flex: 1 1 160px;
   }
 }
 </style>
