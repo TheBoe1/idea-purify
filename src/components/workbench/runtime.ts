@@ -728,7 +728,7 @@ export function createWorkbenchRuntime(schema: SchemaV2, mode: 'preview' | 'publ
             errors[node.nodeId] = error instanceof Error ? error.message : '服务失败'
           })
         }
-        if (node.trigger === 'mount' && !mountedServices.has(instanceId)) {
+        if (mode === 'published' && node.trigger === 'mount' && !mountedServices.has(instanceId)) {
           mountedServices.add(instanceId)
           queueMicrotask(() => {
             if (!disposed) run()

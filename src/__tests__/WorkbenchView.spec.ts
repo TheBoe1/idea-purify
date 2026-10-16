@@ -1,7 +1,8 @@
+import { clearWorkbenchRecovery } from '../stores/workbenchRecovery'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import ComponentConfigView from '../views/ComponentConfigView.vue'
 import DynamicPageView from '../views/DynamicPageView.vue'
 import PageRegion from '../components/workbench/PageRegion.vue'
@@ -29,6 +30,7 @@ function copy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 beforeEach(() => {
+  clearWorkbenchRecovery()
   Object.assign(authState, {
     user: { userId: 'admin-id', username: 'admin', role: 'admin' },
     ready: true,
@@ -38,6 +40,9 @@ beforeEach(() => {
   published = undefined
   writes.length = 0
   failSave = false
+  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue(
+    'confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>,
+  )
   fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const path = String(input),
       body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
@@ -107,6 +112,7 @@ beforeEach(() => {
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 async function render(
   component:

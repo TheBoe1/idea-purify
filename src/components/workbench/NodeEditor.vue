@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
-import { ELEMENT_PLUS_APIS, findElementPlusApi } from '../../../shared/catalog/element-plus.ts'
+import { computed, inject, ref, watch } from 'vue'
+import {
+  ELEMENT_PLUS_APIS,
+  findElementPlusApi,
+  type ApiProp,
+  type ApiValueKind,
+} from '../../../shared/catalog/element-plus.ts'
 import type {
   ApiNode,
   DataBinding,
@@ -12,6 +17,7 @@ import TypedValueEditor from './TypedValueEditor.vue'
 import ActionEditor from './ActionEditor.vue'
 import CallbackEditor from './CallbackEditor.vue'
 import NodeListEditor from './NodeListEditor.vue'
+import ApiPropertyEditor from './ApiPropertyEditor.vue'
 import { allApiNodes, declareStateKey, defaultTypedValue } from './editor-model'
 const props = withDefaults(
   defineProps<{ modelValue: WorkbenchNode; schema: SchemaV2; scopeNames?: string[] }>(),
@@ -21,13 +27,126 @@ const emit = defineEmits<{ 'update:modelValue': [value: WorkbenchNode] }>()
 const declareState = inject(declareStateKey, undefined)
 const query = ref('')
 const addedProp = ref('')
-const activeTab = ref(`props-${props.modelValue.nodeId}`)
+const activeTab = ref('basic')
+watch(
+  () => props.modelValue.nodeId,
+  () => {
+    activeTab.value = 'basic'
+  },
+)
 const node = computed(() =>
   ['component', 'composite', 'service', 'directive', 'design'].includes(props.modelValue.kind)
     ? (props.modelValue as ApiNode)
     : undefined,
 )
 const api = computed(() => node.value && findElementPlusApi(node.value.apiKey))
+const quickLabels: Record<string, string> = {
+  placeholder: '占位文字',
+  type: '类型',
+  size: '尺寸',
+  disabled: '禁用',
+  clearable: '允许清空',
+  maxlength: '最大输入长度',
+  minlength: '最小输入长度',
+  showWordLimit: '显示字数',
+  label: '标签文字',
+  prop: '绑定字段',
+  required: '必填',
+  title: '标题',
+  description: '描述',
+  content: '内容',
+  name: '名称',
+  loading: '加载中',
+  multiple: '多选',
+  filterable: '可搜索',
+  labelWidth: '标签宽度',
+  labelPosition: '标签位置',
+  rows: '输入行数',
+  autosize: '自动高度',
+  text: '文字按钮',
+  round: '圆角',
+  plain: '朴素样式',
+  effect: '主题',
+  closable: '可关闭',
+}
+const quickNames: Record<string, string[]> = {
+  input: [
+    'placeholder',
+    'type',
+    'clearable',
+    'maxlength',
+    'minlength',
+    'showWordLimit',
+    'disabled',
+    'size',
+  ],
+  button: ['type', 'size', 'loading', 'disabled', 'plain', 'round'],
+  form: ['labelWidth', 'labelPosition', 'size', 'disabled'],
+  'form-item': ['label', 'prop', 'required', 'labelWidth'],
+  select: ['placeholder', 'multiple', 'filterable', 'clearable', 'disabled', 'size'],
+  'input-number': ['min', 'max', 'step', 'disabled', 'size'],
+}
+const quickProps = computed(() => {
+  if (!api.value) return []
+  const names = quickNames[api.value.apiKey] ?? [
+    'label',
+    'title',
+    'placeholder',
+    'type',
+    'size',
+    'disabled',
+    'content',
+    'description',
+    'closable',
+  ]
+  return names.flatMap((name) =>
+    api.value!.props.filter(
+      (prop) =>
+        prop.runtimeName === name &&
+        prop.valueKinds.some((kind) => ['string', 'number', 'boolean'].includes(kind)),
+    ),
+  )
+})
+function quickValue(prop: ApiProp): TypedValue {
+  const configured = node.value?.props[prop.name]
+  if (configured) return configured
+  if (prop.enumValues.length && ['', '—'].includes(prop.defaultText.trim()))
+    return { kind: 'literal', value: null }
+  return defaultTypedValue(prop)
+}
+function quickKind(prop: ApiProp): ApiValueKind {
+  const value = quickValue(prop)
+  return value.kind === 'literal' && ['string', 'number', 'boolean'].includes(typeof value.value)
+    ? (typeof value.value as ApiValueKind)
+    : (prop.valueKinds.find((kind) => ['string', 'number', 'boolean'].includes(kind)) ?? 'string')
+}
+const simpleText = computed(() => {
+  const content = node.value?.slots?.default
+  const first = content?.[0]
+  return content?.length === 1 &&
+    first?.kind === 'text' &&
+    first.value.kind === 'literal' &&
+    typeof first.value.value === 'string'
+    ? first
+    : undefined
+})
+const textMeta: ApiProp = {
+  name: '显示文字',
+  runtimeName: 'text',
+  typeText: 'string',
+  valueKinds: ['string'],
+  enumValues: [],
+  defaultText: '',
+}
+function updateSimpleText(value: unknown) {
+  if (!node.value || !simpleText.value) return
+  update({
+    slots: {
+      ...node.value.slots,
+      default: [{ ...simpleText.value, value: { kind: 'literal', value: String(value) } }],
+    },
+  })
+}
 const visibleProps = computed(
   () =>
     api.value?.props.filter((prop) =>
@@ -56,7 +175,13 @@ function removeProperty(name: string) {
 }
 function addProperty() {
   const prop = api.value?.props.find((prop) => prop.name === addedProp.value)
-  if (prop) property(prop.name, defaultTypedValue(prop))
+  if (
+    prop &&
+    node.value &&
+    !Object.hasOwn(node.value.props, prop.name) &&
+    !node.value.models?.[prop.name]
+  )
+    property(prop.name, defaultTypedValue(prop))
   addedProp.value = ''
 }
 function model(name: string, value: TypedValue) {
@@ -117,8 +242,8 @@ function slotScope(text: string, fields?: string[]) {
 <template>
   <div class="node-editor">
     <div class="node-heading">
-      <strong>{{ node?.apiKey ?? modelValue.kind }}</strong
-      ><span class="hint">{{ modelValue.nodeId }}</span>
+      <strong :title="node?.apiKey ?? modelValue.kind">{{ node?.apiKey ?? modelValue.kind }}</strong
+      ><span class="hint node-id" :title="modelValue.nodeId">{{ modelValue.nodeId }}</span>
     </div>
     <TypedValueEditor
       v-if="modelValue.kind === 'text'"
@@ -189,7 +314,46 @@ function slotScope(text: string, fields?: string[]) {
         :closable="false"
       />
       <el-tabs v-model="activeTab"
-        ><el-tab-pane :label="`Props（${api.props.length}）`" :name="`props-${modelValue.nodeId}`"
+        ><el-tab-pane label="常用属性" name="basic">
+          <ApiPropertyEditor
+            v-if="simpleText"
+            :metadata="textMeta"
+            :model-value="simpleText.value.kind === 'literal' ? simpleText.value.value : ''"
+            value-kind="string"
+            simple
+            @update:model-value="updateSimpleText"
+          />
+          <div v-for="prop in quickProps" :key="prop.name" class="quick-property">
+            <template v-if="node.models?.[prop.name] || quickValue(prop).kind !== 'literal'">
+              <span>{{ quickLabels[prop.runtimeName] ?? prop.name }}</span>
+              <el-button @click="activeTab = `props-${modelValue.nodeId}`"
+                >编辑绑定或复杂值</el-button
+              >
+            </template>
+            <ApiPropertyEditor
+              v-else
+              :metadata="{ ...prop, name: quickLabels[prop.runtimeName] ?? prop.name }"
+              :model-value="
+                quickValue(prop).kind === 'literal'
+                  ? (quickValue(prop) as { kind: 'literal'; value: unknown }).value
+                  : ''
+              "
+              :value-kind="quickKind(prop)"
+              simple
+              @update:model-value="
+                property(prop.name, {
+                  kind: 'literal',
+                  value: $event as string | number | boolean | null,
+                })
+              "
+            />
+          </div>
+          <p v-if="!quickProps.length && !simpleText" class="hint">此组件的配置在完整 API 中。</p>
+          <el-button class="advanced-entry" @click="activeTab = `props-${modelValue.nodeId}`"
+            >完整属性与数据绑定（{{ api.props.length }}）</el-button
+          >
+        </el-tab-pane>
+        <el-tab-pane :label="`Props（${api.props.length}）`" :name="`props-${modelValue.nodeId}`"
           ><el-input v-model="query" placeholder="搜索公开属性或类型" aria-label="搜索公开属性" />
           <div class="inline">
             <el-select v-model="addedProp" filterable aria-label="添加公开属性"
@@ -359,12 +523,26 @@ function slotScope(text: string, fields?: string[]) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 .node-heading,
 .inline {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.node-heading strong {
+  overflow-wrap: anywhere;
+}
+.node-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 .node-heading {
   justify-content: space-between;
@@ -374,6 +552,32 @@ function slotScope(text: string, fields?: string[]) {
 }
 .inline :deep(.el-select) {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
+}
+.inline :deep(.el-input) {
+  flex: 1 1 140px;
+  min-width: 0;
+  max-width: 100%;
+}
+.quick-property,
+.advanced-entry {
+  margin-top: 10px;
+  max-width: 100%;
+}
+.node-editor :deep(.el-tabs),
+.node-editor :deep(.el-tab-pane),
+.node-editor :deep(.el-tabs__content) {
+  min-width: 0;
+  max-width: 100%;
+}
+.node-editor :deep(.el-collapse-item__header) {
+  overflow-wrap: anywhere;
+  height: auto;
+  min-height: 48px;
+}
+.node-editor :deep(.el-collapse-item__wrap) {
+  overflow: visible;
 }
 .hint,
 dd {

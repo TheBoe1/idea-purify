@@ -7,6 +7,8 @@ import {
 } from '../../shared/catalog/element-plus.ts'
 import { authState } from '@/stores/auth'
 
+const props = defineProps<{ embedded?: boolean }>()
+const emit = defineEmits<{ select: [apiKey: string] }>()
 const query = ref('')
 const category = ref('all')
 const purpose = ref('all')
@@ -99,10 +101,10 @@ const kindLabels: Record<string, string> = {
       :closable="false"
     />
     <template v-else>
-      <h1>组件目录</h1>
+      <h1 v-if="!props.embedded">组件目录</h1>
       <p class="hint">
         Element Plus {{ ELEMENT_PLUS_VERSION }} ·
-        {{ ELEMENT_PLUS_CATALOG.length }} 个官方条目。选择用途、比较能力，再进入方案工作台配置。
+        {{ ELEMENT_PLUS_CATALOG.length }} 个官方条目。按用途查找，直接添加到当前方案。
       </p>
       <div class="catalog-filters">
         <el-input
@@ -148,7 +150,14 @@ const kindLabels: Record<string, string> = {
           </p>
           <p v-else>设计参数与样式预览，组件事件和插槽不适用。</p>
           <div class="card-actions">
+            <el-button
+              v-if="props.embedded"
+              type="primary"
+              @click="emit('select', entry.rootApiKeys[0]!)"
+              >添加{{ entry.name }}</el-button
+            >
             <RouterLink
+              v-else
               :to="{
                 path: '/admin/workbench',
                 query: { component: entry.key, apiKey: entry.rootApiKeys[0] },
@@ -165,6 +174,8 @@ const kindLabels: Record<string, string> = {
 <style scoped>
 .catalog-page {
   margin: 24px 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .hint {
   color: #606266;

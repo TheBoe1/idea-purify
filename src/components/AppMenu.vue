@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -9,6 +9,7 @@ import { logout, resendVerification } from '@/api/auth'
 import { clearIdeaDraft } from '@/stores/ideaDraft'
 import { getMenuRoutes } from '@/router/routes'
 import { getSessionGeneration } from '@/api/http'
+import { clearWorkbenchRecovery, confirmWorkbenchLeave } from '@/stores/workbenchRecovery'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,12 +27,17 @@ async function signOut() {
   pending.value = true
   const generation = getSessionGeneration()
   try {
+    if (!(await confirmWorkbenchLeave(authState.user?.userId))) return
+    if (generation !== getSessionGeneration()) return
     await logout()
     if (generation !== getSessionGeneration()) return
     authState.user = null
     authState.dialogVisible = true
     authState.notice = '已退出登录。'
     clearIdeaDraft()
+    // The editor may stash a recovery snapshot during the logout-triggered unmount.
+    await nextTick()
+    clearWorkbenchRecovery()
   } catch (error) {
     ElNotification({
       title: '退出失败',

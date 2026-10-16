@@ -80,6 +80,20 @@ export function makeApiNode(
   const node: ApiNode = { kind: api.kind, apiKey, nodeId: nodeId(apiKey), props: {} }
   for (const prop of api.props.filter((item) => item.required))
     node.props[prop.name] = defaultTypedValue(prop)
+  // Only seed registered public properties; advanced API coverage stays in the registry.
+  const initialProps: Record<string, Record<string, JsonValue>> = {
+    input: { placeholder: '请输入内容', clearable: true },
+    select: { placeholder: '请选择', clearable: true },
+    form: { 'label-width': 'auto' },
+    'form-item': { label: '字段名称' },
+    button: { type: 'primary' },
+  }
+  for (const [name, value] of Object.entries(initialProps[apiKey] ?? {})) {
+    const prop = api.props.find(
+      (candidate) => candidate.name === name || candidate.runtimeName === name,
+    )
+    if (prop && !Object.hasOwn(node.props, prop.name)) node.props[prop.name] = typedJson(value)
+  }
   const model = api.props.find((prop) => prop.runtimeName === 'modelValue')
   if (model && declareState) {
     const key = `value-${node.nodeId}`
@@ -93,7 +107,14 @@ export function makeApiNode(
   )
     node.slots = {
       default: [
-        { kind: 'text', nodeId: nodeId('text'), value: { kind: 'literal', value: '示例内容' } },
+        {
+          kind: 'text',
+          nodeId: nodeId('text'),
+          value: {
+            kind: 'literal',
+            value: apiKey === 'button' ? '按钮' : apiKey === 'link' ? '链接' : '内容',
+          },
+        },
       ],
     }
   return node

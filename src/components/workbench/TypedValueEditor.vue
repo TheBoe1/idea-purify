@@ -1,21 +1,26 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import {
   ELEMENT_PLUS_APIS,
   ELEMENT_PLUS_ICON_KEYS,
   findElementPlusApi,
   type ApiProp,
 } from '../../../shared/catalog/element-plus.ts'
-import type { JsonValue, SchemaV2, TypedValue } from '../../../shared/contracts/workbench.ts'
+import {
+  getSafeRegexpError,
+  type JsonValue,
+  type SchemaV2,
+  type TypedValue,
+} from '../../../shared/contracts/workbench.ts'
 import ApiPropertyEditor from './ApiPropertyEditor.vue'
 import CallbackEditor from './CallbackEditor.vue'
 import NodeEditor from './NodeEditor.vue'
 import StructuredValueEditor from './StructuredValueEditor.vue'
 import {
   allApiNodes,
+  declareStateKey,
   defaultTypedValue,
   nodeId,
-  parsePath,
   renderableApis,
   typedJson,
 } from './editor-model'
@@ -31,7 +36,58 @@ const props = withDefaults(
   { scopeNames: () => [], label: '参数值' },
 )
 const emit = defineEmits<{ 'update:modelValue': [value: TypedValue] }>()
+const declareState = inject(declareStateKey, undefined)
+const newStateKey = computed(() => {
+  const value = props.modelValue
+  if (value.kind !== 'binding' || value.source !== 'state' || value.path.length !== 1) return ''
+  const key = value.path[0]
+  return typeof key === 'string' &&
+    /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(key) &&
+    !['constructor', 'prototype', '__proto__'].includes(key) &&
+    !Object.hasOwn(props.schema.state, key)
+    ? key
+    : ''
+})
 const fieldName = ref('')
+const fieldAttempted = ref(false)
+const fieldError = computed(() => {
+  if (!fieldName.value) return fieldAttempted.value ? '请输入字段名。' : ''
+  if (['constructor', 'prototype', '__proto__'].includes(fieldName.value))
+    return '此字段名为保留字段，请换一个名称。'
+  if (
+    props.modelValue.kind === 'object' &&
+    Object.hasOwn(props.modelValue.entries, fieldName.value)
+  )
+    return '字段已存在，原值已保留。请编辑已有字段或使用其他名称。'
+  return ''
+})
+const bindingError = computed(() => {
+  if (props.modelValue.kind !== 'binding') return ''
+  const path = props.modelValue.path
+  if (!path.length || path.length > 12) return '绑定路径需要 1–12 层字段。'
+  if (
+    path.some((part) =>
+      typeof part === 'number'
+        ? !Number.isInteger(part) || part < 0 || part > 2000
+        : !/^[a-zA-Z_$][a-zA-Z0-9_$-]{0,63}$/.test(part) ||
+          ['constructor', 'prototype', '__proto__'].includes(part),
+    )
+  )
+    return '每层字段最多 64 字符，以字母、_ 或 $ 开头；数组索引为 0–2000。'
+  if (props.modelValue.source === 'state' && !Object.hasOwn(props.schema.state, path[0]!))
+    return '此状态尚未声明，请选择已有状态或在状态设置中创建。'
+  return ''
+})
+const htmlError = computed(() =>
+  props.modelValue.kind === 'html' && props.modelValue.value.length > 8000
+    ? `HTML 最多 8000 字符，当前 ${props.modelValue.value.length}；内容已保留，请缩短。`
+    : '',
+)
+const regexpError = computed(() =>
+  props.modelValue.kind === 'regexp'
+    ? getSafeRegexpError(props.modelValue.source, props.modelValue.flags)
+    : '',
+)
 watch(
   () => props.modelValue,
   (value) => {
@@ -143,6 +199,12 @@ const literalKind = computed(() =>
 function update(value: TypedValue) {
   emit('update:modelValue', JSON.parse(JSON.stringify(value)) as TypedValue)
 }
+function updateBindingPath(text: string) {
+  if (props.modelValue.kind !== 'binding') return
+  // Keep empty path parts while typing so a trailing dot is not silently erased.
+  const path = text.split('.').map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+  update({ ...props.modelValue, path })
+}
 function changeKind(kind: TypedValue['kind']) {
   const defaults: Record<TypedValue['kind'], TypedValue> = {
     literal:
@@ -177,12 +239,8 @@ function changeKind(kind: TypedValue['kind']) {
   update(defaults[kind])
 }
 function addField() {
-  if (
-    props.modelValue.kind !== 'object' ||
-    !/^[a-zA-Z_$][a-zA-Z0-9_$-]*$/.test(fieldName.value) ||
-    ['constructor', 'prototype', '__proto__'].includes(fieldName.value)
-  )
-    return
+  fieldAttempted.value = true
+  if (props.modelValue.kind !== 'object' || fieldError.value) return
   const member = objectMembers.value.find((prop) => prop.name === fieldName.value)
   update({
     ...props.modelValue,
@@ -190,6 +248,7 @@ function addField() {
     entries: { ...props.modelValue.entries, [fieldName.value]: defaultTypedValue(member) },
   })
   fieldName.value = ''
+  fieldAttempted.value = false
 }
 function field(value: TypedValue, key: string, child: TypedValue) {
   if (value.kind === 'object') update({ ...value, entries: { ...value.entries, [key]: child } })
@@ -216,7 +275,7 @@ function refKind(choice: string) {
 <template>
   <div class="typed-editor">
     <div class="value-heading">
-      <span>{{ label }}</span
+      <span :title="label" class="value-label">{{ label }}</span
       ><el-select
         :model-value="modelValue.kind"
         :aria-label="`${label} 值来源`"
@@ -246,9 +305,16 @@ function refKind(choice: string) {
           :model-value="modelValue.path.join('.')"
           placeholder="字段路径，例如 row.label 或 0"
           aria-label="绑定字段路径"
-          @update:model-value="update({ ...modelValue, path: parsePath($event) })"
+          :aria-invalid="!!bindingError"
+          @update:model-value="updateBindingPath"
         />
       </div>
+      <p v-if="bindingError" class="field-error" role="alert">{{ bindingError }}</p>
+      <el-button
+        v-if="newStateKey && declareState"
+        @click="declareState(newStateKey, defaultTypedValue(metadata))"
+        >创建状态 {{ newStateKey }}</el-button
+      >
       <p class="hint">
         状态：{{ Object.keys(schema.state).join('、') || '未声明' }}；数据源：{{
           schema.resources.map((item) => item.resourceId).join('、') || '未声明'
@@ -318,8 +384,10 @@ function refKind(choice: string) {
           v-model="fieldName"
           placeholder="字段名"
           aria-label="对象字段"
+          :aria-invalid="!!fieldError"
         /><el-button @click="addField">添加字段</el-button>
       </div>
+      <p v-if="fieldError" class="field-error" role="alert">{{ fieldError }}</p>
     </template>
     <el-date-picker
       v-else-if="modelValue.kind === 'date'"
@@ -329,17 +397,20 @@ function refKind(choice: string) {
       aria-label="日期值"
       @update:model-value="update({ ...modelValue, value: String($event ?? '') })"
     />
-    <div v-else-if="modelValue.kind === 'regexp'" class="inline">
-      <el-input
-        :model-value="modelValue.source"
-        aria-label="正则规则"
-        @update:model-value="update({ ...modelValue, source: $event })"
-      /><el-input
-        :model-value="modelValue.flags"
-        aria-label="正则标记"
-        @update:model-value="update({ ...modelValue, flags: $event })"
-      />
-    </div>
+    <template v-else-if="modelValue.kind === 'regexp'"
+      ><div class="inline">
+        <el-input
+          :model-value="modelValue.source"
+          aria-label="正则规则"
+          @update:model-value="update({ ...modelValue, source: $event })"
+        /><el-input
+          :model-value="modelValue.flags"
+          aria-label="正则标记"
+          @update:model-value="update({ ...modelValue, flags: $event })"
+        />
+      </div>
+      <p v-if="regexpError" class="field-error" role="alert">{{ regexpError }}</p>
+    </template>
     <el-select
       v-else-if="modelValue.kind === 'icon'"
       :model-value="modelValue.name"
@@ -433,14 +504,18 @@ function refKind(choice: string) {
       ><el-input
         :model-value="modelValue.value"
         type="textarea"
+        :autosize="{ minRows: 3, maxRows: 12 }"
         aria-label="安全 HTML"
+        :aria-invalid="!!htmlError"
         @update:model-value="update({ ...modelValue, value: $event })"
       />
+      <p v-if="htmlError" class="field-error" role="alert">{{ htmlError }}</p>
       <p class="hint">仅支持无属性排版标签；安全检查与 DOMPurify 同时生效。</p></template
     >
     <StructuredValueEditor
       v-else-if="modelValue.kind === 'style'"
       :model-value="modelValue.value"
+      :string-limit="200"
       @update:model-value="
         update({ ...modelValue, value: $event as Record<string, string | number> })
       "
@@ -456,12 +531,29 @@ function refKind(choice: string) {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .value-heading,
 .inline {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.inline > :deep(.el-input),
+.inline > :deep(.el-select) {
+  flex: 1 1 140px;
+  min-width: 0;
+  max-width: 100%;
+}
+.value-label {
+  flex: 1 1 90px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .value-heading {
   justify-content: space-between;
@@ -469,6 +561,7 @@ function refKind(choice: string) {
 .value-heading :deep(.el-select) {
   width: 170px;
   flex-shrink: 0;
+  max-width: 100%;
 }
 .nested {
   border-left: 2px solid #d9ecff;
@@ -476,6 +569,29 @@ function refKind(choice: string) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+}
+.typed-editor .typed-editor .typed-editor {
+  padding-inline: 0;
+  border-inline: 0;
+}
+.nested .nested .nested {
+  padding-left: 0;
+  border-left: 0;
+}
+.field-error {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.typed-editor :deep(.el-date-editor),
+.typed-editor :deep(.el-input-number) {
+  max-width: 100%;
+}
+.typed-editor :deep(.el-textarea__inner) {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .hint {
   font-size: 12px;
